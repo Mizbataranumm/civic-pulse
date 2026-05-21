@@ -1,0 +1,82 @@
+{
+  "theme": "Dark Mode Default",
+  "archetype": "Archetype 4: Swiss & High-Contrast (with Terminal/Futuristic accents)",
+  "colors": {
+    "background": "#09090b",
+    "surface": "#121214",
+    "surface_glass": "rgba(18, 18, 20, 0.65)",
+    "primary": "#06b6d4",
+    "secondary": "#10b981",
+    "accent_red": "#ef4444",
+    "accent_amber": "#f59e0b",
+    "text_primary": "#f8fafc",
+    "text_secondary": "#94a3b8",
+    "border": "rgba(255, 255, 255, 0.1)"
+  },
+  "typography": {
+    "fonts": {
+      "headings": "Outfit, sans-serif",
+      "body": "Manrope, sans-serif",
+      "data_mono": "JetBrains Mono, monospace"
+    },
+    "rules": {
+      "hierarchy": "H1 up to 6xl clamp, H2 up to 4xl. Tight tracking on headings (tracking-tight).",
+      "forbidden_fonts": ["Inter", "Space Grotesk", "Roboto", "Open Sans"],
+      "labels": "Uppercase, tiny, wide spacing (tracking-[0.2em])"
+    }
+  },
+  "layout_spacing": {
+    "philosophy": "Generous Spacing on marketing, Dense 'Control Room' for dashboards.",
+    "marketing_grid": "Tetris Grid: grid-cols-1 md:grid-cols-12, gap-8 to gap-12, high asymmetry.",
+    "dashboard_grid": "Control Room Grid: grid-cols-1 md:grid-cols-4, gap-4 to gap-6, height stretch.",
+    "glassmorphism": "backdrop-blur-xl bg-black/60 border border-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.4)]"
+  },
+  "components": {
+    "buttons": "Shadcn-based. Hover states must explicitly set text color (hover:text-white). Primary buttons use primary color.",
+    "cards": "Flat background, 1px subtle border, no shadow by default. Hover: slight lift (-translate-y-1) and shadow-lg.",
+    "forms": "Shadcn Inputs, explicitly styled focus rings (focus:ring-primary focus:ring-2).",
+    "charts": "Recharts. Dark mode configured. Tooltip with glassmorphism surface. Stroke colors using primary/secondary/accent_red.",
+    "map": "Leaflet with CartoDB Dark Matter tiles. Custom HTML markers for status (Red for Overdue, Amber for In-Progress, Emerald for Resolved).",
+    "ai_orb": "Fixed position bottom-right, using the ai_voice_orb media image, glowing drop-shadow, floating framer-motion animation."
+  },
+  "media": {
+    "hero_background": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/f651b65c-d079-4fe2-aa77-aa015c70639a/images/9f3f85492b2cf0b2c2242cc2ad0c8c249035f7768cdb3cbd06fcf740a2d7a2df.png",
+      "description": "Abstract dark futuristic 3D topographical city map for landing page hero background"
+    },
+    "dashboard_preview": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/f651b65c-d079-4fe2-aa77-aa015c70639a/images/a30a79aad530e13c04cf748ad0ef3bec44b8a6514d9fae477365680df0b79ea4.png",
+      "description": "Smart city command center dashboard visualization for marketing features section"
+    },
+    "ai_voice_orb": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/f651b65c-d079-4fe2-aa77-aa015c70639a/images/7042bb865ec871a7204ec11a75829a1618fdd4ee6c5f5a88dc29f1fcb77219e1.png",
+      "description": "Futuristic glowing AI voice orb, to be used in the bottom-right Retell voice feature"
+    },
+    "report_images": [
+      {
+        "url": "https://images.unsplash.com/photo-1779179015285-120aaa822b1b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwyfHxicm9rZW4lMjByb2FkJTIwcG90aG9sZXxlbnwwfHx8fDE3NzkzNzU4NTV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Pothole/broken road sample 1 for dummy issue data"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1779360323197-c7f3522a88eb?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA1NzR8MHwxfHNlYXJjaHwxfHxicm9rZW4lMjByb2FkJTIwcG90aG9sZXxlbnwwfHx8fDE3NzkzNzU4NTV8MA&ixlib=rb-4.1.0&q=85",
+        "description": "Pothole/broken road sample 2 for dummy issue data"
+      }
+    ],
+    "city_backgrounds": [
+      {
+        "url": "https://images.pexels.com/photos/29254364/pexels-photo-29254364.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Night city traffic for public transparency dashboard banner or auth background"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "Always use 'data-testid' on ALL interactive and key informational elements (buttons, links, form inputs, menus, error messages).",
+    "Avoid AI-slop purple/violet gradients entirely. Use the defined palette: deep obsidian base with cyan, emerald, and red accents.",
+    "Implement 'Crystal Glassmorphism' for headers and sticky elements: backdrop-blur-xl bg-black/60 with a subtle border-white/10.",
+    "Use 'Outfit' for headings, 'Manrope' for body text, and 'JetBrains Mono' for data and numbers. NEVER use 'Inter' or 'Space Grotesk'.",
+    "Ensure all Recharts are wrapped in a ResponsiveContainer and use stroke/fill colors that contrast well against dark surfaces.",
+    "Build the Floating Retell Voice Orb in the bottom-right corner using the provided 'ai_voice_orb' media URL, adding a glowing drop-shadow and a subtle floating animation (via Framer Motion).",
+    "Ensure Leaflet maps use a dark theme (like CartoDB Dark Matter) to blend seamlessly with the dark mode UI.",
+    "Implement the 'Control Room Grid' for the Supervisor Dashboard: strict grid layout, dense data, 1px borders, avoiding excessive soft shadows."
+  ]
+}
