@@ -28,7 +28,9 @@ export default function Transparency() {
       const [a, i] = await Promise.all([api.get("/analytics/public"), api.get("/issues/public")]);
       setAnalytics(a.data);
       setIssues(i.data);
-    } catch (e) { /* noop */ }
+    } catch (e) {
+      console.error("Failed to load transparency data", e);
+    }
   };
 
   useEffect(() => {
@@ -109,8 +111,8 @@ export default function Transparency() {
                   innerRadius={55} outerRadius={95}
                   stroke="#09090b" strokeWidth={2}
                 >
-                  {(analytics?.category_breakdown || []).map((_, idx) => (
-                    <Cell key={idx} fill={CHART_COLORS[idx % CHART_COLORS.length]} />
+                  {(analytics?.category_breakdown || []).map((c) => (
+                    <Cell key={c.category} fill={CHART_COLORS[(c.category?.charCodeAt(0) || 0) % CHART_COLORS.length]} />
                   ))}
                 </Pie>
                 <Tooltip contentStyle={{ background: "rgba(15,15,18,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} />

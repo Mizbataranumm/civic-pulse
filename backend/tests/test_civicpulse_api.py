@@ -8,14 +8,14 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'https://civic-pulse-84.preview.emergentagent.com').rstrip('/')
+BASE_URL = os.environ['REACT_APP_BACKEND_URL'].rstrip('/')
 API = f"{BASE_URL}/api"
 
-# Seeded credentials (password123 for all)
+# Seeded credentials (password from env, defaults to seed value)
 CITIZEN_EMAIL = "aarav@civicpulse.in"
 OFFICIAL_EMAIL = "ramesh.official@civicpulse.in"
 SUPERVISOR_EMAIL = "anjali.supervisor@civicpulse.in"
-PASSWORD = "password123"
+PASSWORD = os.environ.get('TEST_SEED_PASSWORD', 'password123')
 
 
 # ---------------- Fixtures ----------------
@@ -300,11 +300,11 @@ class TestNotifications:
     def test_mark_all_read(self, session, citizen_auth):
         r = session.post(f"{API}/notifications/read-all", headers=_hdr(citizen_auth))
         assert r.status_code == 200
-        assert r.json()["ok"] is True
+        assert r.json()["ok"]
         # verify
         r2 = session.get(f"{API}/notifications", headers=_hdr(citizen_auth))
         for n in r2.json():
-            assert n["read"] is True
+            assert n["read"]
 
 
 # ---------------- ANALYTICS ----------------

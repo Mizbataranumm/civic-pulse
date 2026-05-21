@@ -12,7 +12,9 @@ export default function NotificationBell() {
     try {
       const { data } = await api.get("/notifications");
       setItems(data);
-    } catch (e) { /* noop */ }
+    } catch (e) {
+      console.error("Failed to load notifications", e);
+    }
   };
 
   useEffect(() => {

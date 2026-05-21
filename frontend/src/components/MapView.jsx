@@ -28,7 +28,9 @@ function FitToBounds({ issues }) {
     try {
       const bounds = L.latLngBounds(issues.map((i) => [i.latitude, i.longitude]));
       if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
-    } catch (e) { /* noop */ }
+    } catch (e) {
+      console.error("Failed to fit map bounds", e);
+    }
   }, [issues, map]);
   return null;
 }

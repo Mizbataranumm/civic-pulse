@@ -27,7 +27,9 @@ export default function SupervisorDashboard() {
       const [an, is] = await Promise.all([api.get("/analytics/supervisor"), api.get("/issues")]);
       setA(an.data);
       setIssues(is.data);
-    } catch (e) { /* noop */ }
+    } catch (e) {
+      console.error("Failed to load supervisor analytics", e);
+    }
   };
 
   useEffect(() => {
@@ -87,7 +89,7 @@ export default function SupervisorDashboard() {
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
               <Pie data={(a?.category_breakdown||[]).map((c)=>({ name: CATEGORY_LABELS[c.category]||c.category, value: c.count }))} dataKey="value" innerRadius={40} outerRadius={70} stroke="#09090b">
-                {(a?.category_breakdown||[]).map((_, i) => <Cell key={i} fill={CHART_COLORS[i%CHART_COLORS.length]} />)}
+                {(a?.category_breakdown||[]).map((c) => <Cell key={c.category} fill={CHART_COLORS[(c.category?.charCodeAt(0) || 0) % CHART_COLORS.length]} />)}
               </Pie>
               <Tooltip contentStyle={{ background: "rgba(15,15,18,0.95)", border: "1px solid rgba(255,255,255,0.1)" }} />
             </PieChart>

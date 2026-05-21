@@ -185,8 +185,8 @@ export default function Landing() {
                 <div className="uppercase-label text-cyan-400">{CATEGORY_LABELS[it.category]}</div>
               </div>
             ))}
-            {recent.length === 0 && [...Array(4)].map((_, i) => (
-              <div key={i} className="glass rounded-xl p-5 h-40 animate-pulse"></div>
+            {recent.length === 0 && ["s1","s2","s3","s4"].map((k) => (
+              <div key={k} className="glass rounded-xl p-5 h-40 animate-pulse"></div>
             ))}
           </div>
         </div>

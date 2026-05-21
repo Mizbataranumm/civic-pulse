@@ -46,14 +46,14 @@ export default function ReportIssue() {
     );
   };
 
-  const runAI = async () => {
-    if (form.description.trim().length < 10) {
+  const runAI = useCallback(async (description) => {
+    if (description.trim().length < 10) {
       toast.error("Add a bit more description first");
       return;
     }
     setAiLoading(true);
     try {
-      const { data } = await api.post("/ai/categorize", { description: form.description });
+      const { data } = await api.post("/ai/categorize", { description });
       setAiResult(data);
       setForm((f) => ({
         ...f,
@@ -62,19 +62,20 @@ export default function ReportIssue() {
       }));
       toast.success("AI categorized your report");
     } catch (e) {
+      console.error("AI categorization failed", e);
       toast.error("AI categorization failed");
     } finally {
       setAiLoading(false);
     }
-  };
+  }, []);
 
   // Auto-run AI after 1.5s of inactivity in description
   useEffect(() => {
-    if (form.description.trim().length < 15) return;
-    const t = setTimeout(() => { if (!aiLoading) runAI(); }, 1500);
+    const description = form.description;
+    if (description.trim().length < 15) return;
+    const t = setTimeout(() => { if (!aiLoading) runAI(description); }, 1500);
     return () => clearTimeout(t);
-    // eslint-disable-next-line
-  }, [form.description]);
+  }, [form.description, aiLoading, runAI]);
 
   const onImage = (e) => {
     const file = e.target.files?.[0];

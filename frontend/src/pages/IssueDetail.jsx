@@ -21,14 +21,18 @@ export default function IssueDetail() {
     try {
       const { data } = await api.get(`/issues/${id}`);
       setData(data);
-    } catch (e) { /* noop */ }
+    } catch (e) {
+      console.error("Failed to load issue", e);
+    }
   };
 
   useEffect(() => { load(); }, [id]);
 
   useEffect(() => {
     if (user && (user.role === "supervisor" || user.role === "official")) {
-      api.get("/officials").then((r) => setOfficials(r.data)).catch(() => {});
+      api.get("/officials")
+        .then((r) => setOfficials(r.data))
+        .catch((e) => console.error("Failed to load officials", e));
     }
   }, [user]);
 
@@ -65,7 +69,15 @@ export default function IssueDetail() {
     try {
       await api.post(`/issues/${id}/upvote`);
       load();
-    } catch (e) { /* noop */ }
+    } catch (e) {
+      console.error("Upvote failed", e);
+    }
+  };
+
+  const roleColor = (role) => {
+    if (role === "official") return "#06b6d4";
+    if (role === "supervisor") return "#10b981";
+    return "#475569";
   };
 
   return (
@@ -154,7 +166,7 @@ export default function IssueDetail() {
             {comments.map((c) => (
               <div key={c.id} className="flex gap-3">
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold font-mono-data flex-shrink-0"
-                     style={{ background: c.user_role === 'official' ? '#06b6d4' : c.user_role === 'supervisor' ? '#10b981' : '#475569', color:'#000' }}>
+                     style={{ background: roleColor(c.user_role), color:'#000' }}>
                   {c.user_name?.[0]?.toUpperCase()}
                 </div>
                 <div className="flex-1">
