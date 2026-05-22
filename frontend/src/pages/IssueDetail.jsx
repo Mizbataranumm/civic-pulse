@@ -85,7 +85,10 @@ export default function IssueDetail() {
     }
   };
 
-  useEffect(() => { load(); }, [id]);
+  useEffect(() => {
+  load();
+}, [load]);
+  // useEffect(() => { load(); }, [id]);
 
   useEffect(() => {
     api.get(`/issues/${id}/has-voted`).then((r) => setVoted(r.data.voted)).catch(() => {});
