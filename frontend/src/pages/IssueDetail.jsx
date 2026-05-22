@@ -11,7 +11,7 @@ import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import MapView from "@/components/MapView";
-import { ArrowLeft, MessageSquare, Send, ThumbsUp, AlertTriangle, ShieldCheck, ShieldAlert } from "lucide-react";
+import { ArrowLeft, MessageSquare, Send, ThumbsUp, AlertTriangle, ShieldCheck, ShieldAlert, PhoneCall } from "lucide-react";
 
 export default function IssueDetail() {
   const { id } = useParams();
@@ -22,6 +22,7 @@ export default function IssueDetail() {
   const [voted, setVoted] = useState(false);
   const [resolveOpen, setResolveOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
+  const [callingReporter, setCallingReporter] = useState(false);
   const [resolveForm, setResolveForm] = useState({ resolution_note: "", resolution_image: null });
   const [reassignForm, setReassignForm] = useState({ new_official_id: "", reason: "" });
 
@@ -101,6 +102,15 @@ export default function IssueDetail() {
   if (!data) return <div className="text-slate-400 p-6">Loading…</div>;
   const { issue, comments, activity } = data;
   const canUpdate = user?.role === "official" || user?.role === "supervisor";
+  const verification = issue.resolution_verification;
+  const verificationUnavailable = verification?.verification_status === "unavailable";
+  const verificationSuspicious = Boolean(verification?.suspicious);
+  const verificationClasses = verificationSuspicious
+    ? "bg-red-500/10 border-red-500/30"
+    : verificationUnavailable
+      ? "bg-amber-500/10 border-amber-500/30"
+      : "bg-emerald-500/5 border-emerald-500/20";
+  const verificationColor = verificationSuspicious ? "#f87171" : verificationUnavailable ? "#f59e0b" : "#34d399";
 
   const updateStatus = async (status) => {
     try {
@@ -126,6 +136,19 @@ export default function IssueDetail() {
       load();
     } catch (e) {
       console.error("Upvote failed", e);
+    }
+  };
+
+  const callReporter = async () => {
+    setCallingReporter(true);
+    try {
+      const { data } = await api.post(`/issues/${id}/call-reporter`, {});
+      toast.success(`Nova call queued for ${data.reporter_name}`);
+      load();
+    } catch (e) {
+      toast.error(e?.response?.data?.detail || "Could not start the phone call");
+    } finally {
+      setCallingReporter(false);
     }
   };
 
@@ -160,16 +183,17 @@ export default function IssueDetail() {
             {issue.assigned_official_name && <span className="text-slate-500">— {issue.assigned_official_name}</span>}
           </div>
         )}
-        {issue.resolution_verification && (
-          <div className={`mt-3 p-3 rounded-lg border text-sm flex items-start gap-3 ${issue.resolution_verification.suspicious ? "bg-red-500/10 border-red-500/30" : "bg-emerald-500/5 border-emerald-500/20"}`} data-testid="ai-verification-panel">
-            {issue.resolution_verification.suspicious
-              ? <ShieldAlert className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+        {verification && (
+          <div className={`mt-3 p-3 rounded-lg border text-sm flex items-start gap-3 ${verificationClasses}`} data-testid="ai-verification-panel">
+            {verificationSuspicious || verificationUnavailable
+              ? <ShieldAlert className={`w-5 h-5 flex-shrink-0 mt-0.5 ${verificationSuspicious ? "text-red-400" : "text-amber-400"}`} />
               : <ShieldCheck className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />}
             <div>
-              <div className="uppercase-label" style={{ color: issue.resolution_verification.suspicious ? "#f87171" : "#34d399" }}>
+              <div className="uppercase-label" style={{ color: verificationColor }}>
+                {verificationUnavailable && <span className="mr-1">Manual review needed</span>}
                 AI VERIFICATION · confidence {issue.resolution_verification.confidence}
               </div>
-              <div className="text-slate-300 mt-1">{issue.resolution_verification.reasoning}</div>
+              <div className="text-slate-300 mt-1">{verification.reasoning}</div>
               {issue.resolution_note && <div className="text-xs text-slate-500 mt-1 font-mono-data">Note: "{issue.resolution_note}"</div>}
             </div>
           </div>
@@ -227,6 +251,16 @@ export default function IssueDetail() {
                 Reassign Official
               </Button>
             )}
+            <Button
+              onClick={callReporter}
+              disabled={callingReporter}
+              variant="outline"
+              data-testid="call-reporter-button"
+              className="border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300 hover:border-emerald-500/50 text-xs"
+            >
+              <PhoneCall className="w-3.5 h-3.5 mr-1.5" />
+              {callingReporter ? "Calling reporter..." : "Call reporter with Nova"}
+            </Button>
           </div>
         </div>
       )}

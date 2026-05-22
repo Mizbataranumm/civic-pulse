@@ -15,6 +15,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+import requests
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -30,6 +31,14 @@ JWT_ALGO = 'HS256'
 JWT_EXP_HOURS = 24 * 7
 
 EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY')
+RETELL_API_KEY = os.environ.get('RETELL_API_KEY')
+RETELL_API_BASE = os.environ.get('RETELL_API_BASE', 'https://api.retellai.com').rstrip('/')
+RETELL_FROM_NUMBER = os.environ.get('RETELL_FROM_NUMBER')
+RETELL_AGENT_ID = os.environ.get('RETELL_AGENT_ID')
+RETELL_AGENT_VERSION = os.environ.get('RETELL_AGENT_VERSION')
+RETELL_DEFAULT_LANGUAGE = os.environ.get('RETELL_DEFAULT_LANGUAGE')
+RETELL_DEFAULT_COUNTRY_CODE = os.environ.get('RETELL_DEFAULT_COUNTRY_CODE', '+91')
+RETELL_ENABLE_OUTBOUND_CALLS = os.environ.get('RETELL_ENABLE_OUTBOUND_CALLS', 'false').strip().lower() == 'true'
 
 app = FastAPI(title="CivicPulse API")
 api_router = APIRouter(prefix="/api")
@@ -154,6 +163,17 @@ CATEGORY_PATTERNS = {
     ],
 }
 
+RESOLUTION_DOMAIN_KEYWORDS = {
+    "pothole": ["pothole", "road", "asphalt", "crack", "surface", "patch", "filled", "resurfaced"],
+    "garbage": ["garbage", "trash", "waste", "cleaned", "cleared", "bin", "sanitation"],
+    "water_leakage": ["water", "pipe", "leak", "leakage", "burst", "valve", "pipeline"],
+    "streetlight": ["streetlight", "light", "lamp", "bulb", "pole", "electrical", "wiring"],
+    "drainage": ["drain", "drainage", "waterlogging", "storm", "flood", "desilted", "clog"],
+    "sewage": ["sewage", "sewer", "manhole", "gutter", "smell", "blocked line"],
+    "illegal_construction": ["construction", "building", "encroachment", "demolition", "notice", "violation"],
+    "fallen_tree": ["tree", "branch", "uprooted", "cut", "cleared", "removed"],
+}
+
 
 class SignupReq(BaseModel):
     full_name: str
@@ -200,6 +220,13 @@ class CommentCreate(BaseModel):
 
 class AICategorizeReq(BaseModel):
     description: str
+
+
+class VoiceCallReq(BaseModel):
+    language: Optional[str] = None
+    message_context: Optional[str] = None
+    override_agent_id: Optional[str] = None
+    override_agent_version: Optional[int] = None
 
 
 # ------------------- Helpers -------------------
@@ -335,6 +362,209 @@ def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def infer_resolution_domain(text: str) -> Optional[str]:
+    lowered = (text or "").lower()
+    best_domain = None
+    best_score = 0
+    for domain, keywords in RESOLUTION_DOMAIN_KEYWORDS.items():
+        score = sum(1 for keyword in keywords if keyword in lowered)
+        if score > best_score:
+            best_domain = domain
+            best_score = score
+    return best_domain if best_score > 0 else None
+
+
+def heuristic_resolution_verification(original_desc: str, resolution_note: str, has_image: bool) -> Optional[dict]:
+    original = (original_desc or "").lower()
+    note = (resolution_note or "").lower().strip()
+    note_len = len(note)
+
+    if note_len < 10:
+        return {
+            "confidence": 0.2,
+            "suspicious": True,
+            "reasoning": "Resolution note too short (under 10 chars). Likely placeholder.",
+            "verification_status": "heuristic_flagged",
+        }
+
+    generic_placeholders = {
+        "done", "fixed", "ok", "completed", "resolved", "work done", "issue solved", "closed"
+    }
+    if note in generic_placeholders:
+        return {
+            "confidence": 0.15,
+            "suspicious": True,
+            "reasoning": "Resolution note is too generic to verify the work performed.",
+            "verification_status": "heuristic_flagged",
+        }
+
+    original_domain = infer_resolution_domain(original)
+    note_domain = infer_resolution_domain(note)
+    if original_domain and note_domain and original_domain != note_domain:
+        return {
+            "confidence": 0.12,
+            "suspicious": True,
+            "reasoning": f"Resolution note appears to address {note_domain.replace('_', ' ')} work, not the original {original_domain.replace('_', ' ')} complaint.",
+            "verification_status": "heuristic_flagged",
+        }
+
+    # Weak fallback when LLM is unavailable: reward specificity, not just image presence.
+    score = 0.35
+    if note_len >= 30:
+        score += 0.2
+    if note_len >= 60:
+        score += 0.1
+    if has_image:
+        score += 0.15
+    if original_domain and note_domain == original_domain:
+        score += 0.15
+
+    suspicious = score < 0.65
+    return {
+        "confidence": round(min(score, 0.95), 2),
+        "suspicious": suspicious,
+        "reasoning": "Heuristic-only verification." if not suspicious else "Resolution note lacks enough evidence or specificity for a clean pass.",
+        "verification_status": "heuristic_only",
+    }
+
+
+def normalize_phone_number(phone_number: Optional[str], default_country_code: str = '+91') -> Optional[str]:
+    if not phone_number:
+        return None
+
+    raw = str(phone_number).strip()
+    cleaned = re.sub(r"[^\d+]", "", raw)
+
+    if cleaned.startswith('+'):
+        digits = re.sub(r"\D", "", cleaned)
+        return f"+{digits}" if 8 <= len(digits) <= 15 else None
+
+    digits = re.sub(r"\D", "", cleaned)
+    if len(digits) == 10:
+        prefix = default_country_code if default_country_code.startswith('+') else f"+{default_country_code}"
+        return f"{prefix}{digits}"
+    if 11 <= len(digits) <= 15:
+        return f"+{digits}"
+    return None
+
+
+def mask_phone_number(phone_number: Optional[str]) -> str:
+    if not phone_number:
+        return "unknown"
+    digits = re.sub(r"\D", "", phone_number)
+    if len(digits) < 4:
+        return phone_number
+    return f"***{digits[-4:]}"
+
+
+def ensure_retell_outbound_config():
+    if not RETELL_ENABLE_OUTBOUND_CALLS:
+        raise HTTPException(
+            status_code=503,
+            detail="Outbound voice calls are disabled. Set RETELL_ENABLE_OUTBOUND_CALLS=true after configuring Retell."
+        )
+    if not RETELL_API_KEY or not RETELL_FROM_NUMBER:
+        raise HTTPException(
+            status_code=503,
+            detail="Retell outbound call setup incomplete. Add RETELL_API_KEY and RETELL_FROM_NUMBER in backend env."
+        )
+
+
+async def create_retell_outbound_call(
+    to_number: str,
+    issue: dict,
+    requested_by: dict,
+    payload: Optional[VoiceCallReq] = None,
+) -> dict:
+    ensure_retell_outbound_config()
+
+    override_agent_id = payload.override_agent_id if payload and payload.override_agent_id else RETELL_AGENT_ID
+    override_agent_version = payload.override_agent_version if payload and payload.override_agent_version is not None else None
+    if override_agent_version is None and RETELL_AGENT_VERSION:
+        try:
+            override_agent_version = int(RETELL_AGENT_VERSION)
+        except ValueError:
+            logger.warning("Ignoring invalid RETELL_AGENT_VERSION=%s", RETELL_AGENT_VERSION)
+
+    request_body = {
+        "from_number": RETELL_FROM_NUMBER,
+        "to_number": to_number,
+        "metadata": {
+            "source": "civicpulse",
+            "issue_id": issue["id"],
+            "issue_title": issue["title"],
+            "requested_by_user_id": requested_by["id"],
+            "requested_by_role": requested_by["role"],
+        },
+        "retell_llm_dynamic_variables": {
+            "citizen_name": issue.get("reporter_name", "Citizen"),
+            "issue_title": issue["title"],
+            "issue_category": issue["category"],
+            "issue_priority": issue["priority"],
+            "issue_address": issue["address"],
+            "issue_summary": issue.get("ai_summary") or issue["description"][:140],
+            "assigned_department": issue.get("assigned_department", ""),
+            "requested_by_name": requested_by["full_name"],
+            "requested_by_role": requested_by["role"],
+        },
+    }
+
+    if payload and payload.message_context:
+        request_body["retell_llm_dynamic_variables"]["message_context"] = payload.message_context[:500]
+    if override_agent_id:
+        request_body["override_agent_id"] = override_agent_id
+    if override_agent_version is not None:
+        request_body["override_agent_version"] = override_agent_version
+    if payload and payload.language or RETELL_DEFAULT_LANGUAGE:
+        request_body["agent_override"] = {
+            "agent": {
+                "language": (payload.language if payload and payload.language else RETELL_DEFAULT_LANGUAGE),
+                "boosted_keywords": [
+                    issue["title"],
+                    issue["address"],
+                    issue["category"],
+                    issue.get("assigned_department", ""),
+                ],
+            }
+        }
+
+    headers = {
+        "Authorization": f"Bearer {RETELL_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    url = f"{RETELL_API_BASE}/v2/create-phone-call"
+
+    def _post():
+        return requests.post(url, headers=headers, json=request_body, timeout=20)
+
+    try:
+        response = await asyncio.to_thread(_post)
+    except Exception as exc:
+        logger.warning("Retell outbound call request failed: %s", exc)
+        raise HTTPException(status_code=502, detail="Could not reach Retell outbound calling service.") from exc
+
+    if response.status_code not in (200, 201):
+        logger.warning("Retell outbound call rejected: status=%s body=%s", response.status_code, response.text[:500])
+        detail = "Retell rejected the outbound call request."
+        try:
+            payload_json = response.json()
+            if isinstance(payload_json, dict):
+                detail = payload_json.get("message") or payload_json.get("error") or detail
+        except Exception:
+            pass
+        raise HTTPException(status_code=502, detail=detail)
+
+    data = response.json()
+    return {
+        "call_id": data.get("call_id"),
+        "call_status": data.get("call_status"),
+        "from_number": data.get("from_number", RETELL_FROM_NUMBER),
+        "to_number": data.get("to_number", to_number),
+        "agent_id": data.get("agent_id", override_agent_id),
+        "agent_version": data.get("agent_version", override_agent_version),
+    }
+
+
 async def log_activity(issue_id: str, action: str, actor_id: str):
     await db.activity_logs.insert_one({
         "id": str(uuid.uuid4()),
@@ -396,17 +626,17 @@ async def ai_verify_resolution(original_desc: str, resolution_note: str, has_ima
     Lightweight AI verification using Gemini. Heuristic + LLM reasoning.
     Returns: { confidence: 0.0-1.0, suspicious: bool, reasoning: str }
     """
-    # Cheap heuristics first
-    note_len = len(resolution_note.strip())
-    if note_len < 10:
-        return {"confidence": 0.2, "suspicious": True,
-                "reasoning": "Resolution note too short (under 10 chars). Likely placeholder."}
+    heuristic_result = heuristic_resolution_verification(original_desc, resolution_note, has_image)
+    if heuristic_result and heuristic_result.get("verification_status") == "heuristic_flagged":
+        return heuristic_result
 
     if not EMERGENT_LLM_KEY:
-        # Fallback: simple length + image heuristic
-        score = 0.4 + (0.3 if note_len > 30 else 0.0) + (0.3 if has_image else 0.0)
-        return {"confidence": round(score, 2), "suspicious": score < 0.6,
-                "reasoning": "Heuristic-only (no LLM key)."}
+        return heuristic_result or {
+            "confidence": 0.4,
+            "suspicious": True,
+            "reasoning": "Verification unavailable and heuristic review was inconclusive.",
+            "verification_status": "unavailable",
+        }
 
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
@@ -430,14 +660,33 @@ async def ai_verify_resolution(original_desc: str, resolution_note: str, has_ima
         match = re.search(r"\{.*\}", text, re.S)
         if match:
             data = json.loads(match.group(0))
-            return {
+            result = {
                 "confidence": float(data.get("confidence", 0.5)),
                 "suspicious": bool(data.get("suspicious", False)),
                 "reasoning": str(data.get("reasoning", ""))[:240],
+                "verification_status": "llm_verified",
             }
+            if heuristic_result and heuristic_result.get("suspicious") and not result["suspicious"]:
+                return {
+                    **heuristic_result,
+                    "reasoning": heuristic_result["reasoning"],
+                }
+            return result
     except Exception as e:
         logger.warning(f"AI verify failed: {e}")
-    return {"confidence": 0.5, "suspicious": False, "reasoning": "Verification unavailable."}
+    if heuristic_result:
+        return {
+            **heuristic_result,
+            "suspicious": True if heuristic_result["confidence"] < 0.75 else heuristic_result["suspicious"],
+            "reasoning": "Verification unavailable. Manual review recommended." if not heuristic_result["suspicious"] else heuristic_result["reasoning"],
+            "verification_status": "unavailable",
+        }
+    return {
+        "confidence": 0.25,
+        "suspicious": True,
+        "reasoning": "Verification unavailable. Manual review recommended.",
+        "verification_status": "unavailable",
+    }
 
 
 def compute_sla(issue: dict) -> dict:
@@ -843,6 +1092,49 @@ async def reassign_issue(issue_id: str, payload: ReassignReq, user=Depends(requi
                             f"'{issue['title']}' is now with {new_off['full_name']}",
                             issue_id=issue_id, kind="info")
     return {"ok": True, "new_official": new_off['full_name']}
+
+
+@api_router.post("/issues/{issue_id}/call-reporter")
+async def call_issue_reporter(
+    issue_id: str,
+    payload: Optional[VoiceCallReq] = None,
+    user=Depends(require_roles('official', 'supervisor'))
+):
+    issue = await db.issues.find_one({"id": issue_id}, {"_id": 0})
+    if not issue:
+        raise HTTPException(status_code=404, detail="Not found")
+
+    reporter = await db.profiles.find_one({"id": issue["reporter_id"]}, {"_id": 0, "password_hash": 0})
+    if not reporter:
+        raise HTTPException(status_code=404, detail="Reporter not found")
+
+    to_number = normalize_phone_number(reporter.get("phone_number"), RETELL_DEFAULT_COUNTRY_CODE)
+    if not to_number:
+        raise HTTPException(
+            status_code=400,
+            detail="Reporter does not have a valid phone number saved for outbound calling."
+        )
+
+    call = await create_retell_outbound_call(to_number=to_number, issue=issue, requested_by=user, payload=payload)
+
+    await log_activity(issue_id, f"Nova outbound call initiated to reporter {mask_phone_number(to_number)}", user["id"])
+    await push_notification(
+        issue["reporter_id"],
+        "Nova callback initiated",
+        f"Our voice agent will call you shortly about '{issue['title']}'.",
+        issue_id=issue_id,
+        kind="info",
+    )
+
+    return {
+        "ok": True,
+        "issue_id": issue_id,
+        "call_id": call.get("call_id"),
+        "call_status": call.get("call_status"),
+        "to_number": call.get("to_number"),
+        "from_number": call.get("from_number"),
+        "reporter_name": reporter.get("full_name"),
+    }
 
 
 # ------------------- Notifications -------------------

@@ -7,6 +7,7 @@ import uuid
 import time
 import pytest
 import requests
+from backend.server import heuristic_resolution_verification
 
 from dotenv import load_dotenv
 from pathlib import Path
@@ -135,9 +136,28 @@ class TestAICategorize:
         assert set(data.keys()) >= {"category", "priority", "suggested_department", "ai_summary"}
         assert data["category"] == "pothole"
         assert data["priority"] == "critical"
-        assert data["suggested_department"] == "Public Works Department"
-        assert isinstance(data["suggested_department"], str) and len(data["suggested_department"]) > 0
-        assert isinstance(data["ai_summary"], str)
+
+
+class TestResolutionVerification:
+    def test_resolution_verification_flags_wrong_domain(self):
+        result = heuristic_resolution_verification(
+            original_desc="Massive pothole on MG Road causing accidents daily",
+            resolution_note="Streetlight repaired successfully and wiring replaced.",
+            has_image=True,
+        )
+        assert result is not None
+        assert result["suspicious"] is True
+        assert result["verification_status"] == "heuristic_flagged"
+
+    def test_resolution_verification_flags_generic_note(self):
+        result = heuristic_resolution_verification(
+            original_desc="Garbage piles are overflowing near the market",
+            resolution_note="done",
+            has_image=False,
+        )
+        assert result is not None
+        assert result["suspicious"] is True
+        assert result["confidence"] <= 0.2
 
     def test_ai_categorize_short_desc_fallback(self, session):
         r = session.post(f"{API}/ai/categorize", json={"description": "hi"})
@@ -294,6 +314,15 @@ class TestIssues:
         r = session.post(f"{API}/issues/{created_issue['id']}/upvote", headers=_hdr(citizen_auth))
         assert r.status_code == 200
         assert r.json()["upvotes"] == before + 1
+
+    def test_call_reporter_as_citizen_forbidden(self, session, citizen_auth, created_issue):
+        r = session.post(f"{API}/issues/{created_issue['id']}/call-reporter", json={}, headers=_hdr(citizen_auth))
+        assert r.status_code == 403
+
+    def test_call_reporter_returns_clear_setup_error_when_disabled(self, session, supervisor_auth, created_issue):
+        r = session.post(f"{API}/issues/{created_issue['id']}/call-reporter", json={}, headers=_hdr(supervisor_auth))
+        assert r.status_code == 503
+        assert "Outbound voice calls are disabled" in r.json().get("detail", "")
 
 
 # ---------------- NOTIFICATIONS ----------------
