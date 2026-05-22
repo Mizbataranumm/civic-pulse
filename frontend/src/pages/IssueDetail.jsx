@@ -4,11 +4,14 @@ import { api, CATEGORY_LABELS } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
 import { useAuth } from "@/contexts/AuthContext";
 import { toast } from "sonner";
 import MapView from "@/components/MapView";
-import { ArrowLeft, MessageSquare, Send, ThumbsUp, AlertTriangle } from "lucide-react";
+import { ArrowLeft, MessageSquare, Send, ThumbsUp, AlertTriangle, ShieldCheck, ShieldAlert } from "lucide-react";
 
 export default function IssueDetail() {
   const { id } = useParams();
@@ -16,6 +19,11 @@ export default function IssueDetail() {
   const [data, setData] = useState(null);
   const [comment, setComment] = useState("");
   const [officials, setOfficials] = useState([]);
+  const [voted, setVoted] = useState(false);
+  const [resolveOpen, setResolveOpen] = useState(false);
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [resolveForm, setResolveForm] = useState({ resolution_note: "", resolution_image: null });
+  const [reassignForm, setReassignForm] = useState({ new_official_id: "", reason: "" });
 
   const load = async () => {
     try {
@@ -27,6 +35,10 @@ export default function IssueDetail() {
   };
 
   useEffect(() => { load(); }, [id]);
+
+  useEffect(() => {
+    api.get(`/issues/${id}/has-voted`).then((r) => setVoted(r.data.voted)).catch(() => {});
+  }, [id]);
 
   useEffect(() => {
     if (user && (user.role === "supervisor" || user.role === "official")) {
@@ -48,14 +60,6 @@ export default function IssueDetail() {
     } catch (e) { toast.error("Update failed"); }
   };
 
-  const assign = async (off_id) => {
-    try {
-      await api.patch(`/issues/${id}`, { assigned_official_id: off_id });
-      toast.success("Assigned");
-      load();
-    } catch (e) { toast.error("Assign failed"); }
-  };
-
   const send = async () => {
     if (!comment.trim()) return;
     try {
@@ -67,7 +71,8 @@ export default function IssueDetail() {
 
   const upvote = async () => {
     try {
-      await api.post(`/issues/${id}/upvote`);
+      const { data: r } = await api.post(`/issues/${id}/upvote`);
+      setVoted(r.voted);
       load();
     } catch (e) {
       console.error("Upvote failed", e);
@@ -98,6 +103,27 @@ export default function IssueDetail() {
         </div>
         <h1 className="font-heading font-bold text-3xl md:text-4xl tracking-tight">{issue.title}</h1>
         <div className="mt-2 uppercase-label text-cyan-400">{CATEGORY_LABELS[issue.category]} · {issue.address}</div>
+        {issue.assigned_department && (
+          <div className="mt-2 inline-flex items-center gap-2 text-xs text-slate-400">
+            <span className="uppercase-label text-emerald-400">ROUTED TO ·</span>
+            <span className="font-mono-data">{issue.assigned_department}</span>
+            {issue.assigned_official_name && <span className="text-slate-500">— {issue.assigned_official_name}</span>}
+          </div>
+        )}
+        {issue.resolution_verification && (
+          <div className={`mt-3 p-3 rounded-lg border text-sm flex items-start gap-3 ${issue.resolution_verification.suspicious ? "bg-red-500/10 border-red-500/30" : "bg-emerald-500/5 border-emerald-500/20"}`} data-testid="ai-verification-panel">
+            {issue.resolution_verification.suspicious
+              ? <ShieldAlert className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+              : <ShieldCheck className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />}
+            <div>
+              <div className="uppercase-label" style={{ color: issue.resolution_verification.suspicious ? "#f87171" : "#34d399" }}>
+                AI VERIFICATION · confidence {issue.resolution_verification.confidence}
+              </div>
+              <div className="text-slate-300 mt-1">{issue.resolution_verification.reasoning}</div>
+              {issue.resolution_note && <div className="text-xs text-slate-500 mt-1 font-mono-data">Note: "{issue.resolution_note}"</div>}
+            </div>
+          </div>
+        )}
 
         <div className="grid lg:grid-cols-12 gap-6 mt-6">
           <div className="lg:col-span-7 space-y-4">
@@ -122,8 +148,8 @@ export default function IssueDetail() {
                 <div className="uppercase-label text-slate-500">Upvotes</div>
                 <div className="flex items-center gap-2 mt-1">
                   <span className="font-mono-data font-semibold">{issue.upvotes}</span>
-                  <button onClick={upvote} data-testid="issue-upvote-button" className="text-cyan-400 hover:text-cyan-300">
-                    <ThumbsUp className="w-3.5 h-3.5" />
+                  <button onClick={upvote} data-testid="issue-upvote-button" className={voted ? "text-emerald-400" : "text-cyan-400 hover:text-cyan-300"} title={voted ? "Click to remove your vote" : "Upvote"}>
+                    <ThumbsUp className="w-3.5 h-3.5" fill={voted ? "currentColor" : "none"} />
                   </button>
                 </div>
               </div>
@@ -146,18 +172,68 @@ export default function IssueDetail() {
               </Button>
             ))}
             {user?.role === "supervisor" && officials.length > 0 && (
-              <Select onValueChange={assign}>
-                <SelectTrigger data-testid="assign-official-select" className="w-[220px] h-9 bg-white/5 border-white/15 text-xs">
-                  <SelectValue placeholder="Assign to official…" />
-                </SelectTrigger>
-                <SelectContent>
-                  {officials.map((o) => <SelectItem key={o.id} value={o.id}>{o.full_name} · {o.ward}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Button onClick={() => setReassignOpen(true)} variant="outline" data-testid="reassign-open-button" className="border-amber-500/30 hover:bg-amber-500/10 hover:text-amber-300 hover:border-amber-500/50 text-xs">
+                Reassign Official
+              </Button>
             )}
           </div>
         </div>
       )}
+
+      {/* Resolve Dialog with required note + image */}
+      <Dialog open={resolveOpen} onOpenChange={setResolveOpen}>
+        <DialogContent className="bg-[#0a0a0c] border-white/10" data-testid="resolve-dialog">
+          <DialogHeader>
+            <DialogTitle className="font-heading text-2xl">Mark as Resolved</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-slate-400">AI will verify your resolution note against the original complaint. Generic notes (e.g. "done") will be flagged as suspicious.</p>
+          <div className="space-y-3">
+            <div>
+              <Label className="uppercase-label text-slate-400">Resolution Note (min 10 chars)</Label>
+              <Textarea data-testid="resolve-note-input" rows={3} value={resolveForm.resolution_note} onChange={(e) => setResolveForm({ ...resolveForm, resolution_note: e.target.value })}
+                placeholder="Describe the action taken (e.g. 'Pothole filled with cold-mix asphalt; road inspected.')"
+                className="mt-2 bg-white/5 border-white/10 focus:border-emerald-400" />
+            </div>
+            <div>
+              <Label className="uppercase-label text-slate-400">Resolution Photo (recommended)</Label>
+              <input type="file" accept="image/*" onChange={onResolveImage} data-testid="resolve-image-input" className="mt-2 block text-sm text-slate-400" />
+              {resolveForm.resolution_image && <img alt="proof" src={resolveForm.resolution_image} className="mt-2 rounded-lg max-h-40 border border-white/10" />}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResolveOpen(false)} className="border-white/15">Cancel</Button>
+            <Button onClick={submitResolution} data-testid="resolve-submit-button" className="bg-emerald-500 hover:bg-emerald-400 text-black font-semibold">Submit & Verify</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reassign Dialog */}
+      <Dialog open={reassignOpen} onOpenChange={setReassignOpen}>
+        <DialogContent className="bg-[#0a0a0c] border-white/10" data-testid="reassign-dialog">
+          <DialogHeader><DialogTitle className="font-heading text-2xl">Reassign to Different Official</DialogTitle></DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="uppercase-label text-slate-400">New Official</Label>
+              <Select value={reassignForm.new_official_id} onValueChange={(v) => setReassignForm({ ...reassignForm, new_official_id: v })}>
+                <SelectTrigger data-testid="reassign-official-select" className="mt-2 bg-white/5 border-white/10">
+                  <SelectValue placeholder="Pick official…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {officials.map((o) => <SelectItem key={o.id} value={o.id}>{o.full_name} · load {o.active_load} · {o.assigned_categories?.join(", ") || "—"}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label className="uppercase-label text-slate-400">Reason</Label>
+              <Input data-testid="reassign-reason-input" value={reassignForm.reason} onChange={(e) => setReassignForm({ ...reassignForm, reason: e.target.value })} className="mt-2 bg-white/5 border-white/10" placeholder="e.g. previous official transferred / overloaded / wrong department" />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReassignOpen(false)} className="border-white/15">Cancel</Button>
+            <Button onClick={submitReassign} data-testid="reassign-submit-button" className="bg-amber-500 hover:bg-amber-400 text-black font-semibold">Reassign</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <div className="grid lg:grid-cols-12 gap-6">
         <div className="lg:col-span-7 glass rounded-2xl p-6" data-testid="issue-comments">

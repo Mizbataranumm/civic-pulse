@@ -53,5 +53,6 @@ export const CATEGORY_ICONS = {
   drainage: "fa-water",
   sewage: "fa-poo",
   illegal_construction: "fa-helmet-safety",
+  fallen_tree: "fa-tree",
   other: "fa-circle-exclamation",
 };

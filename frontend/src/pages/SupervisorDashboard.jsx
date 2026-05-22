@@ -4,7 +4,7 @@ import { api, CATEGORY_LABELS } from "@/lib/api";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from "recharts";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
 import MapView from "@/components/MapView";
-import { AlertTriangle, Users, BarChart3, Activity as ActivityIcon } from "lucide-react";
+import { AlertTriangle, Users, BarChart3, Activity as ActivityIcon, ShieldAlert, Building2, History, Inbox } from "lucide-react";
 
 const CHART_COLORS = ["#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#3b82f6", "#ec4899", "#94a3b8"];
 
@@ -21,12 +21,18 @@ const Stat = ({ label, value, suffix = "", accent, icon: Icon, testId }) => (
 export default function SupervisorDashboard() {
   const [a, setA] = useState(null);
   const [issues, setIssues] = useState([]);
+  const [gov, setGov] = useState(null);
 
   const load = async () => {
     try {
-      const [an, is] = await Promise.all([api.get("/analytics/supervisor"), api.get("/issues")]);
+      const [an, is, gv] = await Promise.all([
+        api.get("/analytics/supervisor"),
+        api.get("/issues"),
+        api.get("/governance"),
+      ]);
       setA(an.data);
       setIssues(is.data);
+      setGov(gv.data);
     } catch (e) {
       console.error("Failed to load supervisor analytics", e);
     }
@@ -55,6 +61,89 @@ export default function SupervisorDashboard() {
             <div className="font-semibold text-red-300">{escalated.length} issue{escalated.length>1?'s':''} require immediate escalation</div>
             <div className="text-xs text-slate-400">Citizens are waiting beyond SLA. Reassign or push for resolution.</div>
           </div>
+        </div>
+      )}
+
+      {/* AI-ASSISTED GOVERNANCE MONITORING */}
+      {gov && (
+        <div className="grid lg:grid-cols-12 gap-4" data-testid="governance-monitor">
+          <div className="lg:col-span-3 glass rounded-xl p-5" data-testid="gov-unassigned">
+            <div className="flex items-center justify-between mb-2"><span className="uppercase-label text-amber-400">UNASSIGNED</span><Inbox className="w-4 h-4 text-amber-400" /></div>
+            <div className="font-heading font-bold text-3xl text-amber-400">{gov.unassigned_count}</div>
+            <div className="text-xs text-slate-400 mt-1">No matching official available</div>
+          </div>
+          <div className="lg:col-span-3 glass rounded-xl p-5" data-testid="gov-overloaded">
+            <div className="flex items-center justify-between mb-2"><span className="uppercase-label text-red-400">OVERLOADED</span><Users className="w-4 h-4 text-red-400" /></div>
+            <div className="font-heading font-bold text-3xl text-red-400">{gov.overloaded_officials.length}</div>
+            <div className="text-xs text-slate-400 mt-1">Officials with 5+ active issues</div>
+          </div>
+          <div className="lg:col-span-3 glass rounded-xl p-5" data-testid="gov-suspicious">
+            <div className="flex items-center justify-between mb-2"><span className="uppercase-label" style={{color:"#f43f5e"}}>FAKE RESOLUTIONS</span><ShieldAlert className="w-4 h-4" style={{color:"#f43f5e"}} /></div>
+            <div className="font-heading font-bold text-3xl" style={{color:"#f43f5e"}}>{gov.suspicious_resolutions_count}</div>
+            <div className="text-xs text-slate-400 mt-1">AI-flagged for review</div>
+          </div>
+          <div className="lg:col-span-3 glass rounded-xl p-5" data-testid="gov-inactive-depts">
+            <div className="flex items-center justify-between mb-2"><span className="uppercase-label text-slate-400">INACTIVE DEPTS</span><Building2 className="w-4 h-4 text-slate-400" /></div>
+            <div className="font-heading font-bold text-3xl text-slate-300">{gov.inactive_departments.length}</div>
+            <div className="text-xs text-slate-400 mt-1">No assigned officials</div>
+          </div>
+
+          {/* Detail tables */}
+          {gov.suspicious_resolutions.length > 0 && (
+            <div className="lg:col-span-6 glass rounded-xl p-5" data-testid="gov-suspicious-list">
+              <div className="uppercase-label mb-3" style={{color:"#f43f5e"}}><ShieldAlert className="w-3.5 h-3.5 inline mr-1"/> POTENTIAL FAKE RESOLUTIONS</div>
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {gov.suspicious_resolutions.map((s) => (
+                  <Link key={s.id} to={`/app/issues/${s.id}`} className="block p-3 rounded-lg bg-red-500/5 border border-red-500/20 hover:bg-red-500/10">
+                    <div className="text-sm font-medium">{s.title}</div>
+                    <div className="text-xs text-slate-400 mt-0.5">by {s.assigned_official_name} · confidence {s.resolution_verification?.confidence}</div>
+                  </Link>
+                ))}
+              </div>
+            </div>
+          )}
+          {gov.overloaded_officials.length > 0 && (
+            <div className="lg:col-span-6 glass rounded-xl p-5" data-testid="gov-overloaded-list">
+              <div className="uppercase-label text-red-400 mb-3"><Users className="w-3.5 h-3.5 inline mr-1"/> OVERLOADED OFFICIALS</div>
+              <div className="space-y-2">
+                {gov.overloaded_officials.map((o) => (
+                  <div key={o.official_id} className="flex items-center justify-between p-3 rounded-lg bg-red-500/5 border border-red-500/20">
+                    <div>
+                      <div className="text-sm font-medium">{o.name}</div>
+                      <div className="text-xs text-slate-400">{o.ward} · {(o.categories || []).join(", ") || "no cats"}</div>
+                    </div>
+                    <div className="font-mono-data font-bold text-red-400">{o.load} open</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {gov.category_efficiency.length > 0 && (
+            <div className="lg:col-span-12 glass rounded-xl p-5" data-testid="gov-cat-efficiency">
+              <div className="uppercase-label text-emerald-400 mb-3">CATEGORY EFFICIENCY · % resolved</div>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-3">
+                {gov.category_efficiency.map((c) => (
+                  <div key={c.category} className="p-2.5 rounded-lg bg-white/3 border border-white/5">
+                    <div className="uppercase-label text-slate-400 truncate" title={CATEGORY_LABELS[c.category]}>{CATEGORY_LABELS[c.category] || c.category}</div>
+                    <div className="font-heading font-bold text-2xl mt-1" style={{ color: c.efficiency_pct >= 60 ? "#10b981" : c.efficiency_pct >= 30 ? "#f59e0b" : "#ef4444" }}>{c.efficiency_pct}%</div>
+                    <div className="text-[10px] text-slate-500 font-mono-data">{c.resolved}/{c.total}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {gov.recent_reassignments.length > 0 && (
+            <div className="lg:col-span-12 glass rounded-xl p-5" data-testid="gov-reassignments">
+              <div className="uppercase-label text-cyan-400 mb-3"><History className="w-3.5 h-3.5 inline mr-1"/> RECENT REASSIGNMENTS</div>
+              <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                {gov.recent_reassignments.map((r, idx) => (
+                  <div key={`${r.issue_id}-${r.timestamp}-${idx}`} className="text-xs text-slate-400 font-mono-data">
+                    <span className="text-slate-200">{r.issue_title}</span> · {r.previous_official_name || "unassigned"} → <span className="text-cyan-400">{r.new_official_name}</span> · <span className="italic">{r.reason}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
@@ -88,10 +177,12 @@ export default function SupervisorDashboard() {
           <div className="uppercase-label text-amber-400 mt-6 mb-2">CATEGORY MIX</div>
           <ResponsiveContainer width="100%" height={180}>
             <PieChart>
-              <Pie data={(a?.category_breakdown||[]).map((c)=>({ name: CATEGORY_LABELS[c.category]||c.category, value: c.count }))} dataKey="value" innerRadius={40} outerRadius={70} stroke="#09090b">
+              <Pie data={(a?.category_breakdown||[]).map((c)=>({ name: CATEGORY_LABELS[c.category]||c.category, value: c.count }))} dataKey="value" innerRadius={36} outerRadius={66} stroke="#09090b"
+                   label={({ name, value }) => `${name}: ${value}`}
+                   labelLine={{ stroke: "#94a3b8" }}>
                 {(a?.category_breakdown||[]).map((c) => <Cell key={c.category} fill={CHART_COLORS[(c.category?.charCodeAt(0) || 0) % CHART_COLORS.length]} />)}
               </Pie>
-              <Tooltip contentStyle={{ background: "rgba(15,15,18,0.95)", border: "1px solid rgba(255,255,255,0.1)" }} />
+              <Tooltip contentStyle={{ background: "rgba(15,15,18,0.95)", border: "1px solid rgba(255,255,255,0.1)", color:"#f8fafc" }} itemStyle={{ color:"#f8fafc" }} labelStyle={{ color:"#f8fafc" }} />
             </PieChart>
           </ResponsiveContainer>
         </div>

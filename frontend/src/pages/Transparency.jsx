@@ -108,14 +108,20 @@ export default function Transparency() {
                   data={(analytics?.category_breakdown || []).map((c) => ({ name: CATEGORY_LABELS[c.category] || c.category, value: c.count }))}
                   dataKey="value"
                   cx="50%" cy="50%"
-                  innerRadius={55} outerRadius={95}
+                  innerRadius={50} outerRadius={90}
                   stroke="#09090b" strokeWidth={2}
+                  label={({ name, value }) => `${name}: ${value}`}
+                  labelLine={{ stroke: "#94a3b8" }}
                 >
                   {(analytics?.category_breakdown || []).map((c) => (
                     <Cell key={c.category} fill={CHART_COLORS[(c.category?.charCodeAt(0) || 0) % CHART_COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip contentStyle={{ background: "rgba(15,15,18,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8 }} />
+                <Tooltip
+                  contentStyle={{ background: "rgba(15,15,18,0.95)", border: "1px solid rgba(255,255,255,0.1)", borderRadius: 8, color: "#f8fafc" }}
+                  itemStyle={{ color: "#f8fafc" }}
+                  labelStyle={{ color: "#f8fafc" }}
+                />
               </PieChart>
             </ResponsiveContainer>
           </div>

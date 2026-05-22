@@ -46,14 +46,11 @@ export default function ReportIssue() {
     );
   };
 
-  const runAI = useCallback(async (description) => {
-    if (description.trim().length < 10) {
-      toast.error("Add a bit more description first");
-      return;
-    }
+  const runAI = useCallback(async (description, signal) => {
+    if (description.trim().length < 10) return;
     setAiLoading(true);
     try {
-      const { data } = await api.post("/ai/categorize", { description });
+      const { data } = await api.post("/ai/categorize", { description }, { signal });
       setAiResult(data);
       setForm((f) => ({
         ...f,
@@ -62,20 +59,24 @@ export default function ReportIssue() {
       }));
       toast.success("AI categorized your report");
     } catch (e) {
+      if (e.name === "CanceledError" || e.code === "ERR_CANCELED") return;
       console.error("AI categorization failed", e);
-      toast.error("AI categorization failed");
     } finally {
       setAiLoading(false);
     }
   }, []);
 
-  // Auto-run AI after 1.5s of inactivity in description
+  // Auto-run AI after 1.5s of inactivity, ONCE — request cancellation on retype
   useEffect(() => {
     const description = form.description;
     if (description.trim().length < 15) return;
-    const t = setTimeout(() => { if (!aiLoading) runAI(description); }, 1500);
-    return () => clearTimeout(t);
-  }, [form.description, aiLoading, runAI]);
+    const controller = new AbortController();
+    const t = setTimeout(() => { runAI(description, controller.signal); }, 1500);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
+  }, [form.description, runAI]);
 
   const onImage = (e) => {
     const file = e.target.files?.[0];

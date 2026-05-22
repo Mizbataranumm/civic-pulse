@@ -40,9 +40,22 @@ logger = logging.getLogger(__name__)
 
 # ------------------- Models -------------------
 Role = Literal['citizen', 'official', 'supervisor']
-Category = Literal['pothole', 'garbage', 'water_leakage', 'streetlight', 'drainage', 'sewage', 'illegal_construction', 'other']
+Category = Literal['pothole', 'garbage', 'water_leakage', 'streetlight', 'drainage', 'sewage', 'illegal_construction', 'fallen_tree', 'other']
 Priority = Literal['low', 'medium', 'high', 'critical']
-Status = Literal['submitted', 'acknowledged', 'in_progress', 'resolved', 'closed']
+Status = Literal['submitted', 'acknowledged', 'in_progress', 'resolved', 'closed', 'verification_pending', 'suspicious_resolution']
+
+# Default category → department routing map (used as fallback)
+DEPARTMENT_BY_CATEGORY = {
+    'pothole': 'Public Works Department',
+    'garbage': 'Sanitation Department',
+    'water_leakage': 'Water Board',
+    'streetlight': 'Electrical Department',
+    'drainage': 'Drainage & Storm Water',
+    'sewage': 'Sewage Board',
+    'illegal_construction': 'Town Planning',
+    'fallen_tree': 'Horticulture / Tree Management',
+    'other': 'General Administration',
+}
 
 
 class SignupReq(BaseModel):
@@ -51,6 +64,8 @@ class SignupReq(BaseModel):
     password: str
     role: Role = 'citizen'
     ward: Optional[str] = None
+    phone_number: Optional[str] = None
+    assigned_categories: Optional[List[Category]] = None
 
 
 class LoginReq(BaseModel):
@@ -74,6 +89,12 @@ class IssueUpdate(BaseModel):
     priority: Optional[Priority] = None
     assigned_official_id: Optional[str] = None
     resolution_note: Optional[str] = None
+    resolution_image: Optional[str] = None  # base64 — required for "resolved"
+
+
+class ReassignReq(BaseModel):
+    new_official_id: str
+    reason: str
 
 
 class CommentCreate(BaseModel):
@@ -140,15 +161,99 @@ async def log_activity(issue_id: str, action: str, actor_id: str):
     })
 
 
-async def push_notification(user_id: str, title: str, message: str):
+async def push_notification(user_id: str, title: str, message: str, issue_id: Optional[str] = None, kind: str = "info"):
     await db.notifications.insert_one({
         "id": str(uuid.uuid4()),
         "user_id": user_id,
         "title": title,
         "message": message,
+        "issue_id": issue_id,
+        "kind": kind,
         "read": False,
         "created_at": now_iso(),
     })
+
+
+async def auto_assign_official(category: str, ward: Optional[str] = None) -> Optional[dict]:
+    """
+    Category-based + workload-balanced auto-assignment.
+    Picks the official whose assigned_categories contains the category
+    AND who currently has the fewest active (non-resolved/closed) issues.
+    Falls back to ward match, then to any official with the category.
+    Returns None if no matching official exists (caller should escalate to supervisor).
+    """
+    candidates_cursor = db.profiles.find(
+        {"role": "official", "assigned_categories": category},
+        {"_id": 0, "password_hash": 0}
+    )
+    candidates = await candidates_cursor.to_list(100)
+    if not candidates:
+        return None
+
+    # Workload-balance: count active issues per candidate
+    best = None
+    best_load = 10**9
+    for c in candidates:
+        load = await db.issues.count_documents({
+            "assigned_official_id": c['id'],
+            "status": {"$nin": ["resolved", "closed"]}
+        })
+        # Prefer same ward when tied
+        same_ward_bonus = -1 if ward and c.get('ward') == ward else 0
+        score = load + same_ward_bonus
+        if score < best_load:
+            best_load = score
+            best = c
+    return best
+
+
+async def ai_verify_resolution(original_desc: str, resolution_note: str, has_image: bool) -> dict:
+    """
+    Lightweight AI verification using Gemini. Heuristic + LLM reasoning.
+    Returns: { confidence: 0.0-1.0, suspicious: bool, reasoning: str }
+    """
+    # Cheap heuristics first
+    note_len = len(resolution_note.strip())
+    if note_len < 10:
+        return {"confidence": 0.2, "suspicious": True,
+                "reasoning": "Resolution note too short (under 10 chars). Likely placeholder."}
+
+    if not EMERGENT_LLM_KEY:
+        # Fallback: simple length + image heuristic
+        score = 0.4 + (0.3 if note_len > 30 else 0.0) + (0.3 if has_image else 0.0)
+        return {"confidence": round(score, 2), "suspicious": score < 0.6,
+                "reasoning": "Heuristic-only (no LLM key)."}
+
+    try:
+        from emergentintegrations.llm.chat import LlmChat, UserMessage
+        system_msg = (
+            "You are a civic resolution auditor. Given an ORIGINAL complaint and an OFFICIAL RESOLUTION NOTE, "
+            "judge whether the resolution note plausibly addresses the original complaint. "
+            "Respond with ONLY valid JSON, no markdown. Schema: "
+            "{\"confidence\": float in [0,1], \"suspicious\": boolean, \"reasoning\": short string}. "
+            "Mark suspicious=true when the note is generic ('done', 'fixed', 'ok'), unrelated, or vague."
+        )
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"verify-{uuid.uuid4()}",
+                       system_message=system_msg).with_model("gemini", "gemini-3-flash-preview")
+        prompt = (f"ORIGINAL COMPLAINT:\n{original_desc}\n\n"
+                  f"OFFICIAL RESOLUTION NOTE:\n{resolution_note}\n\n"
+                  f"Resolution image provided: {'yes' if has_image else 'no'}\n\n"
+                  f"Return ONLY the JSON object.")
+        resp = await chat.send_message(UserMessage(text=prompt))
+        text = str(resp).strip()
+        text = re.sub(r"^```(?:json)?", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+        match = re.search(r"\{.*\}", text, re.S)
+        if match:
+            data = json.loads(match.group(0))
+            return {
+                "confidence": float(data.get("confidence", 0.5)),
+                "suspicious": bool(data.get("suspicious", False)),
+                "reasoning": str(data.get("reasoning", ""))[:240],
+            }
+    except Exception as e:
+        logger.warning(f"AI verify failed: {e}")
+    return {"confidence": 0.5, "suspicious": False, "reasoning": "Verification unavailable."}
 
 
 def compute_sla(issue: dict) -> dict:
@@ -184,13 +289,17 @@ async def signup(req: SignupReq):
         "password_hash": hash_password(req.password),
         "role": req.role,
         "ward": req.ward or "Central",
+        "phone_number": req.phone_number,
+        "assigned_categories": req.assigned_categories or [],
         "created_at": now_iso(),
     }
     await db.profiles.insert_one(doc)
     token = make_token(user_id, req.role)
     return {
         "token": token,
-        "user": {"id": user_id, "full_name": req.full_name, "email": req.email.lower(), "role": req.role, "ward": doc['ward']}
+        "user": {"id": user_id, "full_name": req.full_name, "email": req.email.lower(),
+                 "role": req.role, "ward": doc['ward'], "phone_number": doc['phone_number'],
+                 "assigned_categories": doc['assigned_categories']}
     }
 
 
@@ -202,7 +311,10 @@ async def login(req: LoginReq):
     token = make_token(user['id'], user['role'])
     return {
         "token": token,
-        "user": {"id": user['id'], "full_name": user['full_name'], "email": user['email'], "role": user['role'], "ward": user.get('ward', 'Central')}
+        "user": {"id": user['id'], "full_name": user['full_name'], "email": user['email'],
+                 "role": user['role'], "ward": user.get('ward', 'Central'),
+                 "phone_number": user.get('phone_number'),
+                 "assigned_categories": user.get('assigned_categories', [])}
     }
 
 
@@ -228,7 +340,7 @@ async def ai_categorize(req: AICategorizeReq):
         system_msg = (
             "You are CivicPulse AI, an expert at classifying civic complaints in Indian cities. "
             "Given a citizen's complaint description, classify it and respond with ONLY valid JSON, no markdown, no explanation. "
-            "Schema: {\"category\": one of [pothole, garbage, water_leakage, streetlight, drainage, sewage, illegal_construction, other], "
+            "Schema: {\"category\": one of [pothole, garbage, water_leakage, streetlight, drainage, sewage, illegal_construction, fallen_tree, other], "
             "\"priority\": one of [low, medium, high, critical], "
             "\"suggested_department\": short department name (e.g. 'Public Works Department', 'Water Board', 'Sanitation Dept'), "
             "\"ai_summary\": one-line summary under 140 chars}"
@@ -266,21 +378,30 @@ async def create_issue(payload: IssueCreate, user=Depends(get_current_user)):
     except Exception:
         pass
 
+    # Category-based auto-assignment with workload balancing
+    auto_official = await auto_assign_official(payload.category, user.get('ward'))
+    assigned_department = DEPARTMENT_BY_CATEGORY.get(payload.category, 'General Administration')
+
     doc = {
         "id": issue_id,
         "title": payload.title,
         "description": payload.description,
         "category": payload.category,
         "priority": payload.priority,
-        "status": "submitted",
+        "status": "acknowledged" if auto_official else "submitted",
         "latitude": payload.latitude,
         "longitude": payload.longitude,
         "address": payload.address,
         "image_url": payload.image_url,
         "reporter_id": user['id'],
         "reporter_name": user['full_name'],
-        "assigned_official_id": None,
-        "assigned_official_name": None,
+        "assigned_official_id": auto_official['id'] if auto_official else None,
+        "assigned_official_name": auto_official['full_name'] if auto_official else None,
+        "assigned_department": assigned_department,
+        "assignment_history": [],
+        "resolution_note": None,
+        "resolution_image": None,
+        "resolution_verification": None,
         "upvotes": 0,
         "ai_summary": ai_summary,
         "ward": user.get('ward', 'Central'),
@@ -290,11 +411,27 @@ async def create_issue(payload: IssueCreate, user=Depends(get_current_user)):
     }
     await db.issues.insert_one(doc)
     await log_activity(issue_id, "Issue reported", user['id'])
-    await push_notification(user['id'], "Issue submitted", f"Your report '{payload.title}' is now in our system.")
+    await push_notification(user['id'], "Issue submitted",
+                            f"Your report '{payload.title}' is in the system" +
+                            (f" — auto-routed to {auto_official['full_name']} ({assigned_department})." if auto_official else " (awaiting supervisor routing)."),
+                            issue_id=issue_id, kind="submitted")
 
+    if auto_official:
+        await log_activity(issue_id, f"Auto-assigned to {auto_official['full_name']} ({assigned_department})", user['id'])
+        await push_notification(
+            auto_official['id'],
+            "🚨 NEW ISSUE ASSIGNED",
+            f"{payload.title} · {payload.category} · {payload.priority} · {payload.address}",
+            issue_id=issue_id, kind="assigned"
+        )
     # Notify supervisors
     async for sup in db.profiles.find({"role": "supervisor"}, {"_id": 0, "id": 1}):
-        await push_notification(sup['id'], "New issue reported", f"{payload.title} — {payload.category}")
+        await push_notification(
+            sup['id'],
+            "Unassigned — needs routing" if not auto_official else "New issue auto-routed",
+            f"{payload.title} — {payload.category}" + ("" if auto_official else " (NO matching official)"),
+            issue_id=issue_id, kind="supervisor_alert" if not auto_official else "info"
+        )
 
     doc.pop('_id', None)
     return doc
@@ -331,7 +468,7 @@ async def list_issues_public():
         {},
         {"_id": 0, "id": 1, "title": 1, "category": 1, "priority": 1, "status": 1,
          "latitude": 1, "longitude": 1, "address": 1, "ward": 1, "created_at": 1,
-         "resolved_at": 1, "ai_summary": 1}
+         "resolved_at": 1, "ai_summary": 1, "assigned_department": 1}
     ).sort("created_at", -1).to_list(1000)
     for it in issues:
         it.update(compute_sla(it))
@@ -358,10 +495,35 @@ async def update_issue(issue_id: str, payload: IssueUpdate, user=Depends(require
     updates = {"updated_at": now_iso()}
     action = None
     if payload.status:
-        updates['status'] = payload.status
-        action = f"Status changed to {payload.status}"
+        # Resolution requires note + image + AI verification
         if payload.status == 'resolved':
+            if not payload.resolution_note or len(payload.resolution_note.strip()) < 10:
+                raise HTTPException(status_code=400, detail="Resolution note required (min 10 chars)")
+            verification = await ai_verify_resolution(
+                original_desc=issue['description'],
+                resolution_note=payload.resolution_note,
+                has_image=bool(payload.resolution_image)
+            )
+            updates['resolution_note'] = payload.resolution_note
+            updates['resolution_image'] = payload.resolution_image
+            updates['resolution_verification'] = verification
             updates['resolved_at'] = now_iso()
+            if verification['suspicious']:
+                updates['status'] = 'suspicious_resolution'
+                action = f"Marked RESOLVED but flagged as suspicious (confidence {verification['confidence']})"
+                # Alert all supervisors
+                async for sup in db.profiles.find({"role": "supervisor"}, {"_id": 0, "id": 1}):
+                    await push_notification(
+                        sup['id'], "⚠️ Suspicious resolution",
+                        f"'{issue['title']}' marked resolved with low confidence ({verification['confidence']}). Review needed.",
+                        issue_id=issue_id, kind="suspicious"
+                    )
+            else:
+                updates['status'] = 'resolved'
+                action = f"Status changed to resolved (AI confidence {verification['confidence']})"
+        else:
+            updates['status'] = payload.status
+            action = f"Status changed to {payload.status}"
     if payload.priority:
         updates['priority'] = payload.priority
         action = (action or "") + f" | Priority set to {payload.priority}"
@@ -372,7 +534,9 @@ async def update_issue(issue_id: str, payload: IssueUpdate, user=Depends(require
         updates['assigned_official_id'] = payload.assigned_official_id
         updates['assigned_official_name'] = official['full_name']
         action = (action or "") + f" | Assigned to {official['full_name']}"
-        await push_notification(payload.assigned_official_id, "New assignment", f"You've been assigned: {issue['title']}")
+        await push_notification(payload.assigned_official_id, "🚨 NEW ISSUE ASSIGNED",
+                                f"You've been assigned: {issue['title']}",
+                                issue_id=issue_id, kind="assigned")
 
     await db.issues.update_one({"id": issue_id}, {"$set": updates})
     if action:
@@ -411,9 +575,75 @@ async def add_comment(issue_id: str, payload: CommentCreate, user=Depends(get_cu
 
 @api_router.post("/issues/{issue_id}/upvote")
 async def upvote(issue_id: str, user=Depends(get_current_user)):
-    await db.issues.update_one({"id": issue_id}, {"$inc": {"upvotes": 1}})
+    """Toggle upvote — one per user. Idempotent."""
+    existing = await db.issue_votes.find_one({"issue_id": issue_id, "user_id": user['id']})
+    if existing:
+        # Remove vote
+        await db.issue_votes.delete_one({"issue_id": issue_id, "user_id": user['id']})
+        await db.issues.update_one({"id": issue_id}, {"$inc": {"upvotes": -1}})
+        voted = False
+    else:
+        await db.issue_votes.insert_one({
+            "id": str(uuid.uuid4()),
+            "issue_id": issue_id,
+            "user_id": user['id'],
+            "vote_type": "up",
+            "created_at": now_iso(),
+        })
+        await db.issues.update_one({"id": issue_id}, {"$inc": {"upvotes": 1}})
+        voted = True
+    issue = await db.issues.find_one({"id": issue_id}, {"_id": 0, "upvotes": 1})
+    return {"upvotes": max(0, issue.get('upvotes', 0)), "voted": voted}
+
+
+@api_router.get("/issues/{issue_id}/has-voted")
+async def has_voted(issue_id: str, user=Depends(get_current_user)):
+    existing = await db.issue_votes.find_one({"issue_id": issue_id, "user_id": user['id']})
+    return {"voted": bool(existing)}
+
+
+@api_router.post("/issues/{issue_id}/reassign")
+async def reassign_issue(issue_id: str, payload: ReassignReq, user=Depends(require_roles('supervisor'))):
     issue = await db.issues.find_one({"id": issue_id}, {"_id": 0})
-    return {"upvotes": issue['upvotes']}
+    if not issue:
+        raise HTTPException(status_code=404, detail="Not found")
+    new_off = await db.profiles.find_one({"id": payload.new_official_id, "role": "official"}, {"_id": 0})
+    if not new_off:
+        raise HTTPException(status_code=400, detail="Target official not found")
+    history_entry = {
+        "previous_official_id": issue.get('assigned_official_id'),
+        "previous_official_name": issue.get('assigned_official_name'),
+        "new_official_id": new_off['id'],
+        "new_official_name": new_off['full_name'],
+        "reason": payload.reason,
+        "reassigned_by": user['id'],
+        "reassigned_by_name": user['full_name'],
+        "timestamp": now_iso(),
+    }
+    await db.issues.update_one(
+        {"id": issue_id},
+        {
+            "$set": {
+                "assigned_official_id": new_off['id'],
+                "assigned_official_name": new_off['full_name'],
+                "updated_at": now_iso(),
+            },
+            "$push": {"assignment_history": history_entry},
+        }
+    )
+    await log_activity(issue_id, f"Reassigned to {new_off['full_name']}: {payload.reason}", user['id'])
+    # Notify all affected
+    if issue.get('assigned_official_id'):
+        await push_notification(issue['assigned_official_id'], "Issue reassigned away",
+                                f"'{issue['title']}' transferred to {new_off['full_name']}",
+                                issue_id=issue_id, kind="info")
+    await push_notification(new_off['id'], "🚨 NEW ISSUE ASSIGNED",
+                            f"Reassigned to you: {issue['title']} — {payload.reason}",
+                            issue_id=issue_id, kind="assigned")
+    await push_notification(issue['reporter_id'], "Your issue reassigned",
+                            f"'{issue['title']}' is now with {new_off['full_name']}",
+                            issue_id=issue_id, kind="info")
+    return {"ok": True, "new_official": new_off['full_name']}
 
 
 # ------------------- Notifications -------------------
@@ -535,7 +765,119 @@ async def supervisor_analytics(user=Depends(require_roles('supervisor'))):
 @api_router.get("/officials")
 async def list_officials(user=Depends(require_roles('supervisor', 'official'))):
     officials = await db.profiles.find({"role": "official"}, {"_id": 0, "password_hash": 0}).to_list(100)
+    # Attach current workload (active issues)
+    for o in officials:
+        o['active_load'] = await db.issues.count_documents({
+            "assigned_official_id": o['id'],
+            "status": {"$nin": ["resolved", "closed"]}
+        })
     return officials
+
+
+@api_router.get("/governance")
+async def governance_monitor(user=Depends(require_roles('supervisor'))):
+    """
+    AI-assisted governance monitoring panel.
+    Returns: unassigned, overloaded officials, SLA breaches, suspicious resolutions,
+    inactive departments, reassignment history, category efficiency.
+    """
+    now = datetime.now(timezone.utc)
+
+    # Unassigned issues
+    unassigned = await db.issues.find(
+        {"assigned_official_id": None, "status": {"$nin": ["resolved", "closed"]}},
+        {"_id": 0, "id": 1, "title": 1, "category": 1, "priority": 1, "address": 1, "created_at": 1}
+    ).to_list(50)
+
+    # Overloaded officials (>= 5 active issues)
+    officials = await db.profiles.find({"role": "official"}, {"_id": 0, "password_hash": 0}).to_list(100)
+    overloaded = []
+    for o in officials:
+        load = await db.issues.count_documents({
+            "assigned_official_id": o['id'],
+            "status": {"$nin": ["resolved", "closed"]}
+        })
+        if load >= 5:
+            overloaded.append({
+                "official_id": o['id'], "name": o['full_name'],
+                "ward": o.get('ward'), "load": load,
+                "categories": o.get('assigned_categories', [])
+            })
+
+    # SLA-breached
+    sla_breached = []
+    open_issues = await db.issues.find(
+        {"status": {"$nin": ["resolved", "closed"]}},
+        {"_id": 0, "id": 1, "title": 1, "category": 1, "created_at": 1,
+         "assigned_official_name": 1, "address": 1}
+    ).to_list(500)
+    for it in open_issues:
+        try:
+            c = datetime.fromisoformat(it['created_at'])
+            hours = (now - c).total_seconds() / 3600
+            if hours > 48:
+                it['hours_open'] = round(hours, 1)
+                sla_breached.append(it)
+        except Exception:
+            pass
+
+    # Suspicious / fake resolutions
+    suspicious = await db.issues.find(
+        {"$or": [{"status": "suspicious_resolution"},
+                 {"resolution_verification.suspicious": True}]},
+        {"_id": 0, "id": 1, "title": 1, "category": 1,
+         "assigned_official_name": 1, "resolution_verification": 1, "resolved_at": 1}
+    ).to_list(100)
+
+    # Category efficiency
+    cat_eff = []
+    for cat in ['pothole', 'garbage', 'water_leakage', 'streetlight', 'drainage',
+                'sewage', 'illegal_construction', 'fallen_tree', 'other']:
+        total = await db.issues.count_documents({"category": cat})
+        resolved = await db.issues.count_documents({"category": cat, "status": {"$in": ["resolved", "closed"]}})
+        if total > 0:
+            cat_eff.append({
+                "category": cat,
+                "total": total,
+                "resolved": resolved,
+                "efficiency_pct": round((resolved / total) * 100, 1)
+            })
+
+    # Inactive departments — categories with 0 active officials assigned
+    inactive_departments = []
+    for cat in ['pothole', 'garbage', 'water_leakage', 'streetlight', 'drainage',
+                'sewage', 'illegal_construction', 'fallen_tree']:
+        n_off = await db.profiles.count_documents({"role": "official", "assigned_categories": cat})
+        if n_off == 0:
+            inactive_departments.append({"category": cat,
+                                         "department": DEPARTMENT_BY_CATEGORY.get(cat)})
+
+    # Recent reassignments (flatten history from issues)
+    recent_reassignments = []
+    issues_with_history = await db.issues.find(
+        {"assignment_history": {"$exists": True, "$not": {"$size": 0}}},
+        {"_id": 0, "id": 1, "title": 1, "assignment_history": 1}
+    ).to_list(100)
+    for it in issues_with_history:
+        for h in it.get('assignment_history', []):
+            recent_reassignments.append({
+                "issue_id": it['id'], "issue_title": it['title'], **h
+            })
+    recent_reassignments = sorted(recent_reassignments,
+                                  key=lambda x: x.get('timestamp', ''), reverse=True)[:20]
+
+    return {
+        "unassigned_count": len(unassigned),
+        "unassigned": unassigned[:20],
+        "overloaded_officials": overloaded,
+        "sla_breached_count": len(sla_breached),
+        "sla_breached": sorted(sla_breached, key=lambda x: x['hours_open'], reverse=True)[:20],
+        "suspicious_resolutions_count": len(suspicious),
+        "suspicious_resolutions": suspicious[:20],
+        "category_efficiency": cat_eff,
+        "inactive_departments": inactive_departments,
+        "recent_reassignments": recent_reassignments,
+    }
 
 
 # ------------------- Seed -------------------
@@ -570,11 +912,13 @@ DEMO_ISSUES = [
     ("drainage", "Storm drain blocked, flooding", "Heavy rains cause knee-deep flooding due to clogged drain.", "critical"),
     ("sewage", "Sewage overflow on footpath", "Manhole overflowing, sewage flowing onto pedestrian path.", "critical"),
     ("illegal_construction", "Unauthorized building extension", "Building owner extending second floor without permits, blocking neighbor windows.", "medium"),
+    ("fallen_tree", "Fallen tree blocking road", "Large tree uprooted in last night's storm now blocks both lanes of traffic.", "critical"),
     ("pothole", "Cracks and potholes on flyover ramp", "Multiple potholes appearing on the ramp causing damage to vehicles.", "high"),
     ("garbage", "Construction debris dumped illegally", "Pile of construction waste dumped on public land near school.", "medium"),
     ("streetlight", "Single streetlight flickering", "One pole flickering all night, possible electrical hazard.", "low"),
     ("water_leakage", "Tanker truck leak", "Municipal water tanker leaking continuously near distribution point.", "medium"),
     ("drainage", "Open drain without cover", "Drain cover stolen, dangerous open hole 4 feet deep.", "critical"),
+    ("fallen_tree", "Branches hanging dangerously over wires", "Tree branches resting on overhead electrical wires after rain.", "high"),
     ("pothole", "Bus stop area damaged", "Road around bus stop riddled with potholes; commuters injured.", "high"),
     ("garbage", "Public dustbin damaged", "Dustbin broken; trash strewn across plaza.", "low"),
     ("sewage", "Bad odor from manhole", "Persistent sewage smell from manhole near market.", "medium"),
@@ -586,63 +930,118 @@ DEMO_ISSUES = [
 ]
 
 
+SEED_VERSION = "v3-2026-02"  # bump to force re-seed migration
+
+
 async def seed_if_empty():
+    # Migration: if there are issues without assigned_department, wipe and reseed (v2 migration)
+    marker = await db.system.find_one({"key": "seed_version"})
+    current_version = marker.get("value") if marker else None
+
+    if current_version != SEED_VERSION:
+        logger.info(f"Migrating seed: {current_version} → {SEED_VERSION}. Clearing demo data…")
+        await db.issues.delete_many({})
+        await db.notifications.delete_many({})
+        await db.activity_logs.delete_many({})
+        await db.issue_comments.delete_many({})
+        await db.issue_votes.delete_many({})
+        await db.profiles.delete_many({"email": {"$regex": "@civicpulse\\.in$"}})
+        await db.system.update_one({"key": "seed_version"},
+                                   {"$set": {"value": SEED_VERSION}}, upsert=True)
+
     count = await db.issues.count_documents({})
     if count > 0:
         logger.info(f"Seed skipped: {count} issues exist")
         return
 
-    # Create demo users
+    # Demo users with assigned_categories for officials
     users_to_create = [
-        ("citizen", "Aarav Sharma", "aarav@civicpulse.in", "password123", "Central"),
-        ("citizen", "Priya Patel", "priya@civicpulse.in", "password123", "West"),
-        ("citizen", "Rohan Kumar", "rohan@civicpulse.in", "password123", "South"),
-        ("official", "Officer Ramesh", "ramesh.official@civicpulse.in", "password123", "Central"),
-        ("official", "Officer Sneha", "sneha.official@civicpulse.in", "password123", "West"),
-        ("official", "Officer Vikas", "vikas.official@civicpulse.in", "password123", "South"),
-        ("supervisor", "Supervisor Anjali", "anjali.supervisor@civicpulse.in", "password123", "All"),
+        # citizens
+        ("citizen", "Aarav Sharma", "aarav@civicpulse.in", "password123", "Central", "+91-9876500001", []),
+        ("citizen", "Priya Patel", "priya@civicpulse.in", "password123", "West", "+91-9876500002", []),
+        ("citizen", "Rohan Kumar", "rohan@civicpulse.in", "password123", "South", "+91-9876500003", []),
+        # officials with departments
+        ("official", "Officer Ramesh (Roads)", "ramesh.official@civicpulse.in", "password123",
+         "Central", "+91-9876511001", ["pothole", "streetlight"]),
+        ("official", "Officer Sneha (Sanitation)", "sneha.official@civicpulse.in", "password123",
+         "West", "+91-9876511002", ["garbage", "sewage"]),
+        ("official", "Officer Vikas (Water)", "vikas.official@civicpulse.in", "password123",
+         "South", "+91-9876511003", ["water_leakage", "drainage"]),
+        ("official", "Officer Meera (Trees)", "meera.official@civicpulse.in", "password123",
+         "East", "+91-9876511004", ["fallen_tree", "other"]),
+        ("official", "Officer Arjun (Planning)", "arjun.official@civicpulse.in", "password123",
+         "North", "+91-9876511005", ["illegal_construction"]),
+        # supervisor
+        ("supervisor", "Supervisor Anjali", "anjali.supervisor@civicpulse.in", "password123",
+         "All", "+91-9876522001", []),
     ]
     user_ids = {}
-    for role, name, email, pw, ward in users_to_create:
-        if not await db.profiles.find_one({"email": email}):
-            uid = str(uuid.uuid4())
-            await db.profiles.insert_one({
-                "id": uid,
-                "full_name": name,
-                "email": email,
-                "password_hash": hash_password(pw),
-                "role": role,
-                "ward": ward,
-                "created_at": now_iso(),
-            })
-            user_ids[email] = uid
-        else:
-            existing = await db.profiles.find_one({"email": email})
-            user_ids[email] = existing['id']
+    for role, name, email, pw, ward, phone, cats in users_to_create:
+        uid = str(uuid.uuid4())
+        await db.profiles.insert_one({
+            "id": uid,
+            "full_name": name,
+            "email": email,
+            "password_hash": hash_password(pw),
+            "role": role,
+            "ward": ward,
+            "phone_number": phone,
+            "assigned_categories": cats,
+            "created_at": now_iso(),
+        })
+        user_ids[email] = uid
 
     citizen_ids = [user_ids[e] for e in ["aarav@civicpulse.in", "priya@civicpulse.in", "rohan@civicpulse.in"]]
-    official_ids = [user_ids[e] for e in ["ramesh.official@civicpulse.in", "sneha.official@civicpulse.in", "vikas.official@civicpulse.in"]]
-    officials = [await db.profiles.find_one({"id": oid}, {"_id": 0}) for oid in official_ids]
 
-    statuses_distribution = ["submitted"] * 4 + ["acknowledged"] * 4 + ["in_progress"] * 6 + ["resolved"] * 5 + ["closed"] * 1
+    statuses_distribution = ["submitted"] * 3 + ["acknowledged"] * 6 + ["in_progress"] * 8 + ["resolved"] * 5 + ["closed"] * 1
     now = datetime.now(timezone.utc)
+
+    # Realistic timestamps: hours-old, not days-old
+    # Range from 2 hours to 60 hours ago, so SLA breaches show in single digits not 100+
+    hour_ages = [2, 4, 6, 8, 10, 12, 18, 24, 30, 36, 40, 44, 48, 50, 54, 56, 60, 62, 66, 70, 72, 80, 96]
 
     for i, (cat, title, desc, prio) in enumerate(DEMO_ISSUES):
         loc = INDIAN_LOCATIONS[i % len(INDIAN_LOCATIONS)]
         reporter = citizen_ids[i % len(citizen_ids)]
         reporter_doc = await db.profiles.find_one({"id": reporter}, {"_id": 0})
         st = statuses_distribution[i % len(statuses_distribution)]
-        days_ago = (i * 7 + 3) % 14
-        created = now - timedelta(days=days_ago, hours=i * 2)
+        hours_ago = hour_ages[i % len(hour_ages)]
+        created = now - timedelta(hours=hours_ago)
+
+        # Auto-assign based on category
+        match_off = await auto_assign_official(cat, loc[3])
+        assigned_id = match_off['id'] if match_off else None
+        assigned_name = match_off['full_name'] if match_off else None
+        assigned_dept = DEPARTMENT_BY_CATEGORY.get(cat, 'General Administration')
+
         resolved_at = None
-        assigned_id = None
-        assigned_name = None
-        if st in ('in_progress', 'resolved', 'closed', 'acknowledged'):
-            off = officials[i % len(officials)]
-            assigned_id = off['id']
-            assigned_name = off['full_name']
+        resolution_note = None
+        resolution_image = None
+        resolution_verification = None
         if st in ('resolved', 'closed'):
-            resolved_at = (created + timedelta(hours=24 + i * 3)).isoformat()
+            resolved_at = (created + timedelta(hours=min(hours_ago - 1, 24))).isoformat()
+            # Some realistic resolution notes
+            sample_notes = [
+                "Pothole filled with cold-mix asphalt. Road inspected.",
+                "Garbage cleared by Sanitation team. Bin replaced.",
+                "Leak located at junction, pipe section replaced.",
+                "Streetlight bulb replaced. Voltage verified.",
+                "Storm drain manually cleared of debris. Flow restored.",
+            ]
+            resolution_note = sample_notes[i % len(sample_notes)]
+            # Mark the first resolved issue (lowest index) as suspicious for demo
+            if i in (17, 18) and resolution_verification is None:
+                resolution_note = "done"
+                resolution_verification = {
+                    "confidence": 0.15, "suspicious": True,
+                    "reasoning": "Resolution note 'done' is generic and does not describe action taken."
+                }
+                st = 'suspicious_resolution'
+            else:
+                resolution_verification = {
+                    "confidence": 0.85, "suspicious": False,
+                    "reasoning": "Note describes concrete action plausibly addressing the complaint."
+                }
 
         doc = {
             "id": str(uuid.uuid4()),
@@ -660,6 +1059,11 @@ async def seed_if_empty():
             "reporter_name": reporter_doc['full_name'],
             "assigned_official_id": assigned_id,
             "assigned_official_name": assigned_name,
+            "assigned_department": assigned_dept,
+            "assignment_history": [],
+            "resolution_note": resolution_note,
+            "resolution_image": resolution_image,
+            "resolution_verification": resolution_verification,
             "upvotes": (i * 7) % 47,
             "ai_summary": desc[:140],
             "created_at": created.isoformat(),
@@ -668,7 +1072,7 @@ async def seed_if_empty():
         }
         await db.issues.insert_one(doc)
 
-    logger.info("Seed complete: demo users + 20 issues")
+    logger.info(f"Seed complete ({SEED_VERSION}): {len(users_to_create)} users + {len(DEMO_ISSUES)} issues")
 
 
 @app.on_event("startup")
