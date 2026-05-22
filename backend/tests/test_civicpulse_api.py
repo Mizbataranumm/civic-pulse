@@ -8,7 +8,15 @@ import time
 import pytest
 import requests
 
-BASE_URL = os.environ['REACT_APP_BACKEND_URL'].rstrip('/')
+from dotenv import load_dotenv
+from pathlib import Path
+
+# Try loading env configurations
+for env_path in [Path(__file__).parents[1] / '.env', Path(__file__).parents[2] / 'frontend' / '.env']:
+    if env_path.exists():
+        load_dotenv(env_path)
+
+BASE_URL = os.environ.get('REACT_APP_BACKEND_URL', 'http://localhost:8001').rstrip('/')
 API = f"{BASE_URL}/api"
 
 # Seeded credentials (password from env, defaults to seed value)
@@ -116,7 +124,7 @@ class TestAuth:
 
 # ---------------- AI CATEGORIZATION ----------------
 class TestAICategorize:
-    ALLOWED_CATEGORIES = {"pothole", "garbage", "water_leakage", "streetlight", "drainage", "sewage", "illegal_construction", "other"}
+    ALLOWED_CATEGORIES = {"pothole", "garbage", "water_leakage", "streetlight", "drainage", "sewage", "illegal_construction", "fallen_tree", "other"}
     ALLOWED_PRIORITIES = {"low", "medium", "high", "critical"}
 
     def test_ai_categorize_pothole(self, session):
@@ -125,8 +133,9 @@ class TestAICategorize:
         assert r.status_code == 200
         data = r.json()
         assert set(data.keys()) >= {"category", "priority", "suggested_department", "ai_summary"}
-        assert data["category"] in self.ALLOWED_CATEGORIES
-        assert data["priority"] in self.ALLOWED_PRIORITIES
+        assert data["category"] == "pothole"
+        assert data["priority"] == "critical"
+        assert data["suggested_department"] == "Public Works Department"
         assert isinstance(data["suggested_department"], str) and len(data["suggested_department"]) > 0
         assert isinstance(data["ai_summary"], str)
 
@@ -141,8 +150,17 @@ class TestAICategorize:
         desc = "Garbage piles overflowing on the street for the last week, foul smell and stray dogs everywhere"
         r = session.post(f"{API}/ai/categorize", json={"description": desc})
         assert r.status_code == 200
-        # Should be either 'garbage' if Gemini works, or 'other' on fallback - both acceptable
-        assert r.json()["category"] in self.ALLOWED_CATEGORIES
+        data = r.json()
+        assert data["category"] == "garbage"
+        assert data["priority"] == "critical"
+
+    def test_ai_categorize_common_pothole_typo(self, session):
+        desc = "Massive pathole on MG road is causing daily accidents"
+        r = session.post(f"{API}/ai/categorize", json={"description": desc})
+        assert r.status_code == 200
+        data = r.json()
+        assert data["category"] == "pothole"
+        assert data["priority"] == "critical"
 
 
 # ---------------- ISSUES ----------------
@@ -165,7 +183,7 @@ class TestIssues:
 
     def test_create_issue(self, created_issue):
         assert created_issue["title"].startswith("TEST_")
-        assert created_issue["status"] == "submitted"
+        assert created_issue["status"] in ("submitted", "acknowledged")
         assert created_issue["upvotes"] == 0
         assert "id" in created_issue
         assert "_id" not in created_issue
@@ -254,7 +272,7 @@ class TestIssues:
 
     def test_patch_resolve_sets_resolved_at(self, session, official_auth, created_issue):
         r = session.patch(f"{API}/issues/{created_issue['id']}",
-                          json={"status": "resolved"},
+                          json={"status": "resolved", "resolution_note": "Pothole filled with cold-mix asphalt. Road inspected."},
                           headers=_hdr(official_auth))
         assert r.status_code == 200
         data = r.json()

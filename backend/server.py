@@ -57,6 +57,103 @@ DEPARTMENT_BY_CATEGORY = {
     'other': 'General Administration',
 }
 
+VALID_CATEGORIES = [
+    'pothole',
+    'garbage',
+    'water_leakage',
+    'streetlight',
+    'drainage',
+    'sewage',
+    'illegal_construction',
+    'fallen_tree',
+    'other',
+]
+VALID_PRIORITIES = ['low', 'medium', 'high', 'critical']
+
+CATEGORY_ALIASES = {
+    "water leakage": "water_leakage",
+    "waterleakage": "water_leakage",
+    "water-leakage": "water_leakage",
+    "illegal construction": "illegal_construction",
+    "illegalconstruction": "illegal_construction",
+    "illegal-construction": "illegal_construction",
+    "fallen tree": "fallen_tree",
+    "fallentree": "fallen_tree",
+    "fallen-tree": "fallen_tree",
+    "road damage": "pothole",
+    "road issue": "pothole",
+    "waste": "garbage",
+    "trash": "garbage",
+}
+
+CATEGORY_PATTERNS = {
+    "pothole": [
+        r"\bpot\s*holes?\b",
+        r"\bpotholes?\b",
+        r"\bpatholes?\b",
+        r"\bsink\s*holes?\b",
+        r"\bcraters?\b",
+        r"\broad\s+(?:is\s+)?(?:broken|damaged|collapsed|caved\s*in|sunken)\b",
+        r"\bbroken\s+road\b",
+    ],
+    "garbage": [
+        r"\bgarbage\b",
+        r"\btrash\b",
+        r"\bwaste\b",
+        r"\blitter\b",
+        r"\bdumping\b",
+        r"\boverflowing\s+bin\b",
+        r"\buncleared\s+bin\b",
+    ],
+    "water_leakage": [
+        r"\bwater\s+leak(?:age)?\b",
+        r"\bleaking\s+pipe\b",
+        r"\bpipe\s+burst\b",
+        r"\bpipeline\s+leak\b",
+        r"\bwater\s+seepage\b",
+        r"\btap\s+leak(?:age)?\b",
+    ],
+    "streetlight": [
+        r"\bstreet\s*lights?\b",
+        r"\bstreet\s*lamps?\b",
+        r"\blamp\s*post\b",
+        r"\blight\s*pole\b",
+        r"\bstreet\s+is\s+dark\b",
+        r"\blights?\s+(?:not\s+working|not\s+functioning|broken|fused)\b",
+    ],
+    "drainage": [
+        r"\bdrain(?:age)?\b",
+        r"\bwaterlogging\b",
+        r"\bflood(?:ing)?\b",
+        r"\bclogged\s+drain\b",
+        r"\bstorm\s+water\b",
+        r"\bdrain\s+overflow\b",
+    ],
+    "sewage": [
+        r"\bsewage\b",
+        r"\bsewer\b",
+        r"\bmanhole\b",
+        r"\bgutter\b",
+        r"\bdrain\s+smell\b",
+        r"\bfoul\s+smell\b",
+        r"\bstink(?:ing)?\b",
+    ],
+    "illegal_construction": [
+        r"\billegal\s+construction\b",
+        r"\bunauthori[sz]ed\s+construction\b",
+        r"\bunauthori[sz]ed\s+building\b",
+        r"\bencroach(?:ment)?\b",
+        r"\bbuilding\s+violation\b",
+    ],
+    "fallen_tree": [
+        r"\bfallen\s+tree\b",
+        r"\buprooted\s+tree\b",
+        r"\btree\s+branch\b",
+        r"\bbranch\s+fell\b",
+        r"\btree\s+blocked\b",
+    ],
+}
+
 
 class SignupReq(BaseModel):
     full_name: str
@@ -106,6 +203,93 @@ class AICategorizeReq(BaseModel):
 
 
 # ------------------- Helpers -------------------
+def normalize_category(raw_category: str) -> str:
+    raw = str(raw_category or "other").lower().strip()
+    raw = CATEGORY_ALIASES.get(raw, raw)
+    return raw if raw in VALID_CATEGORIES else "other"
+
+
+def normalize_priority(raw_priority: str) -> str:
+    raw = str(raw_priority or "medium").lower().strip()
+    return raw if raw in VALID_PRIORITIES else "medium"
+
+
+def build_ai_summary(description: str) -> str:
+    cleaned = re.sub(r"\s+", " ", description).strip().strip(".")
+    if not cleaned:
+        return ""
+    cleaned = cleaned[0].upper() + cleaned[1:]
+    return cleaned[:140]
+
+
+def build_ai_result(description: str, category: str, priority: str, ai_summary: Optional[str] = None) -> dict:
+    safe_category = normalize_category(category)
+    safe_priority = normalize_priority(priority)
+    summary = build_ai_summary(ai_summary or description)
+    return {
+        "category": safe_category,
+        "priority": safe_priority,
+        "suggested_department": DEPARTMENT_BY_CATEGORY.get(safe_category, "General Administration"),
+        "ai_summary": summary,
+    }
+
+
+def heuristic_ai_categorize(description: str) -> dict:
+    text = description.lower()
+    scores = {category: 0 for category in VALID_CATEGORIES}
+
+    for category, patterns in CATEGORY_PATTERNS.items():
+        for pattern in patterns:
+            if re.search(pattern, text):
+                scores[category] += 1
+
+    category = max(scores, key=scores.get)
+    if scores[category] == 0:
+        category = "other"
+
+    critical_patterns = [
+        r"\baccidents?\b",
+        r"\binjur(?:y|ies)\b",
+        r"\bdeath\b",
+        r"\bdanger(?:ous)?\b",
+        r"\belectrocution\b",
+        r"\bfire\b",
+        r"\broad\s+blocked\b",
+        r"\bcompletely\s+blocked\b",
+        r"\bflood(?:ing)?\b",
+        r"\boverflow(?:ing)?\b",
+    ]
+    high_patterns = [
+        r"\bsafety\b",
+        r"\brisk\b",
+        r"\bhazard(?:ous)?\b",
+        r"\burgent\b",
+        r"\bhuge\b",
+        r"\bmassive\b",
+        r"\bbig\b",
+        r"\bdeep\b",
+        r"\bstray dogs?\b",
+        r"\bdark\b",
+    ]
+    low_patterns = [
+        r"\bminor\b",
+        r"\bsmall\b",
+        r"\bcosmetic\b",
+        r"\bslight\b",
+    ]
+
+    if any(re.search(pattern, text) for pattern in critical_patterns):
+        priority = "critical"
+    elif any(re.search(pattern, text) for pattern in high_patterns):
+        priority = "high"
+    elif any(re.search(pattern, text) for pattern in low_patterns):
+        priority = "low"
+    else:
+        priority = "medium"
+
+    return build_ai_result(description, category, priority)
+
+
 def hash_password(pw: str) -> str:
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
@@ -234,7 +418,7 @@ async def ai_verify_resolution(original_desc: str, resolution_note: str, has_ima
             "Mark suspicious=true when the note is generic ('done', 'fixed', 'ok'), unrelated, or vague."
         )
         chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"verify-{uuid.uuid4()}",
-                       system_message=system_msg).with_model("gemini", "gemini-3-flash-preview")
+                       system_message=system_msg).with_model("gemini", "gemini-2.0-flash")
         prompt = (f"ORIGINAL COMPLAINT:\n{original_desc}\n\n"
                   f"OFFICIAL RESOLUTION NOTE:\n{resolution_note}\n\n"
                   f"Resolution image provided: {'yes' if has_image else 'no'}\n\n"
@@ -327,40 +511,55 @@ async def me(user=Depends(get_current_user)):
 @api_router.post("/ai/categorize")
 async def ai_categorize(req: AICategorizeReq):
     """Categorize an issue using Gemini via emergentintegrations."""
-    fallback = {
-        "category": "other",
-        "priority": "medium",
-        "suggested_department": "General Administration",
-        "ai_summary": req.description[:140]
-    }
-    if not EMERGENT_LLM_KEY or len(req.description.strip()) < 5:
+    fallback = heuristic_ai_categorize(req.description)
+    if len(req.description.strip()) < 5:
+        return build_ai_result(req.description, "other", "medium")
+    if not EMERGENT_LLM_KEY:
         return fallback
     try:
         from emergentintegrations.llm.chat import LlmChat, UserMessage
         system_msg = (
             "You are CivicPulse AI, an expert at classifying civic complaints in Indian cities. "
-            "Given a citizen's complaint description, classify it and respond with ONLY valid JSON, no markdown, no explanation. "
-            "Schema: {\"category\": one of [pothole, garbage, water_leakage, streetlight, drainage, sewage, illegal_construction, fallen_tree, other], "
-            "\"priority\": one of [low, medium, high, critical], "
-            "\"suggested_department\": short department name (e.g. 'Public Works Department', 'Water Board', 'Sanitation Dept'), "
-            "\"ai_summary\": one-line summary under 140 chars}"
+            "Given a citizen's complaint description, classify it and respond with ONLY a valid JSON object. "
+            "No markdown, no code fences, no explanation — just the raw JSON object. "
+            "You MUST use ONLY these exact values:\n"
+            "category: exactly one of [pothole, garbage, water_leakage, streetlight, drainage, sewage, illegal_construction, fallen_tree, other]\n"
+            "priority: exactly one of [low, medium, high, critical]\n"
+            "Rules: road damage/holes → pothole; waste/trash → garbage; pipe/water → water_leakage; "
+            "lamp/light → streetlight; flood/drain → drainage; smell/manhole → sewage; "
+            "unauthorized building → illegal_construction; tree → fallen_tree. "
+            "Priority rules: mentions accidents/injuries/flooding → critical; safety risk → high; "
+            "ongoing nuisance → medium; minor/cosmetic → low. "
+            "Schema: {\"category\": \"<exact value from list>\", \"priority\": \"<exact value from list>\", "
+            "\"suggested_department\": \"<department name>\", \"ai_summary\": \"<one line under 140 chars>\"}"
         )
-        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cat-{uuid.uuid4()}", system_message=system_msg).with_model("gemini", "gemini-3-flash-preview")
-        msg = UserMessage(text=f"Complaint: {req.description}\n\nReturn ONLY the JSON object.")
+        chat = LlmChat(api_key=EMERGENT_LLM_KEY, session_id=f"cat-{uuid.uuid4()}", system_message=system_msg).with_model("gemini", "gemini-2.0-flash")
+        msg = UserMessage(text=f"Complaint: {req.description}\n\nReturn ONLY the raw JSON object with no markdown or code fences.")
         resp = await chat.send_message(msg)
         text = str(resp).strip()
+        logger.info(f"🤖 RAW GEMINI RESPONSE: {repr(text)}")   # ← ADD THIS
         # Strip code fences if any
         text = re.sub(r"^```(?:json)?", "", text).strip()
         text = re.sub(r"```$", "", text).strip()
         match = re.search(r"\{.*\}", text, re.S)
+        logger.info(f"🔍 AFTER STRIP, match={bool(match)}, text={repr(text[:200])}")  # ← ADD THIS
+
         if match:
             data = json.loads(match.group(0))
-            return {
-                "category": data.get("category", "other"),
-                "priority": data.get("priority", "medium"),
-                "suggested_department": data.get("suggested_department", "General Administration"),
-                "ai_summary": data.get("ai_summary", req.description[:140]),
-            }
+            category = normalize_category(data.get("category", "other"))
+            priority = normalize_priority(data.get("priority", "medium"))
+
+            if category == "other" and fallback["category"] != "other":
+                category = fallback["category"]
+            if priority == "medium" and fallback["priority"] in {"high", "critical"}:
+                priority = fallback["priority"]
+
+            return build_ai_result(
+                req.description,
+                category,
+                priority,
+                data.get("ai_summary"),
+            )
     except Exception as e:
         logger.warning(f"AI categorize failed: {e}")
     return fallback
@@ -1094,7 +1293,7 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=[origin.strip().strip('"').strip("'") for origin in os.environ.get('CORS_ORIGINS', '*').split(',') if origin.strip()],
     allow_methods=["*"],
     allow_headers=["*"],
 )

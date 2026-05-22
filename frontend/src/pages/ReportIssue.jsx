@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import MapView from "@/components/MapView";
 import { toast } from "sonner";
-import { Sparkles, Upload, MapPin, Loader2 } from "lucide-react";
+import { Sparkles, Upload, MapPin, Loader2, Search } from "lucide-react";
 
 export default function ReportIssue() {
   const nav = useNavigate();
@@ -26,11 +26,78 @@ export default function ReportIssue() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [locatingAddress, setLocatingAddress] = useState(false);
+  const [reverseGeocoding, setReverseGeocoding] = useState(false);
 
   const setLoc = useCallback((lat, lng) => {
     setPicked([lat, lng]);
     setForm((f) => ({ ...f, latitude: lat, longitude: lng }));
   }, []);
+
+  const syncAddressFromCoords = useCallback(async (lat, lng) => {
+    setReverseGeocoding(true);
+    try {
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+      if (!res.ok) throw new Error("reverse geocode failed");
+      const data = await res.json();
+      const addr = data.address || {};
+      const label = [
+        addr.road || addr.pedestrian || addr.neighbourhood || addr.suburb,
+        addr.city || addr.town || addr.village || addr.state_district,
+      ].filter(Boolean).join(", ") || data.display_name;
+
+      if (label) {
+        setForm((f) => ({ ...f, address: label }));
+      }
+    } catch (e) {
+      console.error("Reverse geocoding failed", e);
+    } finally {
+      setReverseGeocoding(false);
+    }
+  }, []);
+
+  const locateAddressOnMap = useCallback(async () => {
+    const query = form.address.trim();
+    if (query.length < 3) {
+      toast.error("Enter a more specific address");
+      return;
+    }
+
+    setLocatingAddress(true);
+    try {
+      const params = new URLSearchParams({
+        q: query,
+        format: "jsonv2",
+        limit: "1",
+        countrycodes: "in",
+      });
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`);
+      if (!res.ok) throw new Error("address lookup failed");
+      const data = await res.json();
+      const best = data?.[0];
+
+      if (!best) {
+        toast.error("Could not find that address on the map");
+        return;
+      }
+
+      const lat = Number(best.lat);
+      const lng = Number(best.lon);
+      setLoc(lat, lng);
+      setForm((f) => ({ ...f, address: best.display_name || f.address }));
+      toast.success("Pinned address on the map");
+    } catch (e) {
+      console.error("Address lookup failed", e);
+      toast.error("Could not locate that address right now");
+    } finally {
+      setLocatingAddress(false);
+    }
+  }, [form.address, setLoc]);
+
+  const pickOnMap = useCallback((lat, lng) => {
+    setLoc(lat, lng);
+    syncAddressFromCoords(lat, lng);
+  }, [setLoc, syncAddressFromCoords]);
 
   const useMyLocation = () => {
     if (!navigator.geolocation) {
@@ -40,6 +107,7 @@ export default function ReportIssue() {
     navigator.geolocation.getCurrentPosition(
       (pos) => {
         setLoc(pos.coords.latitude, pos.coords.longitude);
+        syncAddressFromCoords(pos.coords.latitude, pos.coords.longitude);
         toast.success("Location detected");
       },
       () => toast.error("Could not get location")
@@ -52,12 +120,24 @@ export default function ReportIssue() {
     try {
       const { data } = await api.post("/ai/categorize", { description }, { signal });
       setAiResult(data);
+
+      const VALID_CATEGORIES = ['pothole','garbage','water_leakage','streetlight','drainage','sewage','illegal_construction','fallen_tree','other'];
+      const VALID_PRIORITIES = ['low','medium','high','critical'];
+
+      const safeCategory = VALID_CATEGORIES.includes(data.category) ? data.category : null;
+      const safePriority = VALID_PRIORITIES.includes(data.priority) ? data.priority : null;
+
       setForm((f) => ({
         ...f,
-        category: data.category || f.category,
-        priority: data.priority || f.priority,
+        category: safeCategory || f.category,
+        priority: safePriority || f.priority,
       }));
-      toast.success("AI categorized your report");
+
+      if (safeCategory && safePriority) {
+        toast.success("AI categorized your report");
+      } else {
+        toast.warning("AI ran but returned an unexpected value — please check category/priority");
+      }
     } catch (e) {
       if (e.name === "CanceledError" || e.code === "ERR_CANCELED") return;
       console.error("AI categorization failed", e);
@@ -173,7 +253,20 @@ export default function ReportIssue() {
           </div>
 
           <div>
-            <Label className="uppercase-label text-slate-400">Address</Label>
+            <div className="flex items-center justify-between gap-3">
+              <Label className="uppercase-label text-slate-400">Address</Label>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={locateAddressOnMap}
+                disabled={locatingAddress}
+                className="h-7 px-2 text-[11px] text-cyan-300 hover:text-cyan-200 hover:bg-cyan-500/10"
+              >
+                {locatingAddress ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <Search className="w-3 h-3 mr-1" />}
+                Locate on map
+              </Button>
+            </div>
             <Input
               data-testid="report-address-input"
               required
@@ -182,6 +275,9 @@ export default function ReportIssue() {
               className="mt-2 h-11 bg-white/5 border-white/10 focus:border-cyan-400"
               placeholder="Street, locality, city"
             />
+            <div className="mt-2 text-[11px] text-slate-500">
+              Type an address and press `Locate on map`, or click directly on the map to drop an exact pin.
+            </div>
           </div>
 
           <div>
@@ -205,9 +301,12 @@ export default function ReportIssue() {
                 <MapPin className="w-3.5 h-3.5 mr-1" /> Use my location
               </Button>
             </div>
-            <MapView issues={[]} center={picked} zoom={13} height="280px" onPickLocation={setLoc} pickedPin={picked} fit={false} />
+            <MapView issues={[]} center={picked} zoom={16} height="280px" onPickLocation={pickOnMap} pickedPin={picked} fit={false} />
             <div className="mt-2 text-xs font-mono-data text-slate-500">
               {picked[0].toFixed(5)}, {picked[1].toFixed(5)}
+            </div>
+            <div className="mt-1 text-[11px] text-slate-500">
+              {reverseGeocoding ? "Updating address from selected pin..." : "Click the exact road spot to place the report pin."}
             </div>
           </div>
 

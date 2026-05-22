@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import { motion } from "framer-motion";
 import { X, Mic } from "lucide-react";
 
-const RETELL_URL = "https://agent.retellai.com/orb/agent_10f1a66c8a90ed960ec28d902b?token=237de10b73f96d76964473b18ebbca6e";
+const RETELL_URL = process.env.REACT_APP_RETELL_ORB_URL || "https://agent.retellai.com/orb/agent_10f1a66c8a90ed960ec28d902b?token=237de10b73f96d76964473b18ebbca6e";
 
 export default function RetellOrb() {
   const [open, setOpen] = useState(false);

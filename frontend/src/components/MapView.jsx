@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { MapContainer, TileLayer, Marker, Popup, useMap } from "react-leaflet";
+import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import { CATEGORY_LABELS, STATUS_COLORS } from "@/lib/api";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
@@ -21,6 +21,18 @@ const buildIcon = (status) => {
   });
 };
 
+const pickedPinIcon = L.divIcon({
+  className: "civic-picked-marker",
+  html: `<div style="position:relative;width:30px;height:30px;">
+    <div style="position:absolute;left:50%;top:50%;width:30px;height:30px;transform:translate(-50%,-50%);border-radius:999px;background:rgba(245,158,11,0.2);box-shadow:0 0 0 10px rgba(245,158,11,0.08);"></div>
+    <div style="position:absolute;inset:0;background:#f59e0b;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 18px rgba(245,158,11,0.7);border:3px solid rgba(255,255,255,0.96);"></div>
+    <div style="position:absolute;left:9px;top:9px;width:12px;height:12px;background:rgba(0,0,0,0.72);border-radius:50%;"></div>
+  </div>`,
+  iconSize: [30, 30],
+  iconAnchor: [15, 30],
+  popupAnchor: [0, -30],
+});
+
 function FitToBounds({ issues }) {
   const map = useMap();
   useEffect(() => {
@@ -35,13 +47,34 @@ function FitToBounds({ issues }) {
   return null;
 }
 
-function LocationPicker({ onPick }) {
+function SyncMapView({ center, zoom, pickedPin }) {
   const map = useMap();
+
   useEffect(() => {
-    const handler = (e) => onPick(e.latlng.lat, e.latlng.lng);
-    map.on("click", handler);
-    return () => map.off("click", handler);
-  }, [map, onPick]);
+    const target = pickedPin || center;
+    if (!target) return;
+
+    const [lat, lng] = target;
+    const current = map.getCenter();
+    const samePoint = Math.abs(current.lat - lat) < 0.00001 && Math.abs(current.lng - lng) < 0.00001;
+
+    if (!samePoint) {
+      map.flyTo([lat, lng], Math.max(map.getZoom(), zoom), {
+        animate: true,
+        duration: 0.35,
+      });
+    }
+  }, [center, map, pickedPin, zoom]);
+
+  return null;
+}
+
+function LocationPicker({ onPick }) {
+  useMapEvents({
+    click(e) {
+      onPick(e.latlng.lat, e.latlng.lng);
+    },
+  });
   return null;
 }
 
@@ -53,6 +86,7 @@ export default function MapView({ issues = [], center = [20.5937, 78.9629], zoom
           url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
           attribution='&copy; OpenStreetMap &copy; CARTO'
         />
+        <SyncMapView center={center} zoom={zoom} pickedPin={pickedPin} />
         {fit && <FitToBounds issues={issues} />}
         {onPickLocation && <LocationPicker onPick={onPickLocation} />}
         {issues.map((issue) => (
@@ -71,9 +105,16 @@ export default function MapView({ issues = [], center = [20.5937, 78.9629], zoom
           </Marker>
         ))}
         {pickedPin && (
-          <Marker position={pickedPin} icon={buildIcon("acknowledged")}>
-            <Popup>New issue location</Popup>
-          </Marker>
+          <>
+            <CircleMarker
+              center={pickedPin}
+              radius={16}
+              pathOptions={{ color: "#f59e0b", weight: 2, fillColor: "#f59e0b", fillOpacity: 0.14 }}
+            />
+            <Marker position={pickedPin} icon={pickedPinIcon} zIndexOffset={1000}>
+              <Popup>Selected issue location</Popup>
+            </Marker>
+          </>
         )}
       </MapContainer>
     </div>

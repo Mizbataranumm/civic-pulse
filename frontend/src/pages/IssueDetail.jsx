@@ -25,6 +25,56 @@ export default function IssueDetail() {
   const [resolveForm, setResolveForm] = useState({ resolution_note: "", resolution_image: null });
   const [reassignForm, setReassignForm] = useState({ new_official_id: "", reason: "" });
 
+  // ✅ Fixed: onResolveImage
+  const onResolveImage = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      setResolveForm(f => ({ ...f, resolution_image: reader.result }));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // ✅ Fixed: submitResolution
+  const submitResolution = async () => {
+    if (!resolveForm.resolution_note || resolveForm.resolution_note.length < 10) {
+      toast.error("Resolution note must be at least 10 characters");
+      return;
+    }
+    try {
+      await api.patch(`/issues/${id}`, {
+        status: "resolved",
+        resolution_note: resolveForm.resolution_note,
+        resolution_image: resolveForm.resolution_image || null,
+      });
+      toast.success("Issue marked as resolved!");
+      setResolveOpen(false);
+      load();
+    } catch (err) {
+      toast.error("Failed to resolve issue");
+    }
+  };
+
+  // ✅ Fixed: submitReassign
+  const submitReassign = async () => {
+    if (!reassignForm.new_official_id) {
+      toast.error("Please select an official");
+      return;
+    }
+    try {
+      await api.post(`/issues/${id}/reassign`, {
+        new_official_id: reassignForm.new_official_id,
+        reason: reassignForm.reason,
+      });
+      toast.success("Issue reassigned!");
+      setReassignOpen(false);
+      load();
+    } catch (err) {
+      toast.error("Failed to reassign issue");
+    }
+  };
+
   const load = async () => {
     try {
       const { data } = await api.get(`/issues/${id}`);
@@ -166,7 +216,8 @@ export default function IssueDetail() {
           <div className="uppercase-label text-cyan-400 mb-3">OFFICIAL CONTROLS</div>
           <div className="flex flex-wrap gap-2">
             {["acknowledged","in_progress","resolved","closed"].map((s) => (
-              <Button key={s} variant="outline" data-testid={`status-${s}-button`} onClick={() => updateStatus(s)}
+              <Button key={s} variant="outline" data-testid={`status-${s}-button`}
+                onClick={() => s === "resolved" ? setResolveOpen(true) : updateStatus(s)}
                 className="border-white/15 hover:bg-cyan-500/10 hover:text-cyan-300 hover:border-cyan-500/40 text-xs">
                 Mark as {s.replace("_"," ")}
               </Button>
@@ -180,18 +231,18 @@ export default function IssueDetail() {
         </div>
       )}
 
-      {/* Resolve Dialog with required note + image */}
       <Dialog open={resolveOpen} onOpenChange={setResolveOpen}>
         <DialogContent className="bg-[#0a0a0c] border-white/10" data-testid="resolve-dialog">
           <DialogHeader>
             <DialogTitle className="font-heading text-2xl">Mark as Resolved</DialogTitle>
           </DialogHeader>
-          <p className="text-sm text-slate-400">AI will verify your resolution note against the original complaint. Generic notes (e.g. "done") will be flagged as suspicious.</p>
+          <p className="text-sm text-slate-400">AI will verify your resolution note against the original complaint.</p>
           <div className="space-y-3">
             <div>
               <Label className="uppercase-label text-slate-400">Resolution Note (min 10 chars)</Label>
-              <Textarea data-testid="resolve-note-input" rows={3} value={resolveForm.resolution_note} onChange={(e) => setResolveForm({ ...resolveForm, resolution_note: e.target.value })}
-                placeholder="Describe the action taken (e.g. 'Pothole filled with cold-mix asphalt; road inspected.')"
+              <Textarea data-testid="resolve-note-input" rows={3} value={resolveForm.resolution_note}
+                onChange={(e) => setResolveForm({ ...resolveForm, resolution_note: e.target.value })}
+                placeholder="Describe the action taken..."
                 className="mt-2 bg-white/5 border-white/10 focus:border-emerald-400" />
             </div>
             <div>
@@ -207,7 +258,6 @@ export default function IssueDetail() {
         </DialogContent>
       </Dialog>
 
-      {/* Reassign Dialog */}
       <Dialog open={reassignOpen} onOpenChange={setReassignOpen}>
         <DialogContent className="bg-[#0a0a0c] border-white/10" data-testid="reassign-dialog">
           <DialogHeader><DialogTitle className="font-heading text-2xl">Reassign to Different Official</DialogTitle></DialogHeader>
@@ -219,13 +269,15 @@ export default function IssueDetail() {
                   <SelectValue placeholder="Pick official…" />
                 </SelectTrigger>
                 <SelectContent>
-                  {officials.map((o) => <SelectItem key={o.id} value={o.id}>{o.full_name} · load {o.active_load} · {o.assigned_categories?.join(", ") || "—"}</SelectItem>)}
+                  {officials.map((o) => <SelectItem key={o.id} value={o.id}>{o.full_name} · load {o.active_load}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>
             <div>
               <Label className="uppercase-label text-slate-400">Reason</Label>
-              <Input data-testid="reassign-reason-input" value={reassignForm.reason} onChange={(e) => setReassignForm({ ...reassignForm, reason: e.target.value })} className="mt-2 bg-white/5 border-white/10" placeholder="e.g. previous official transferred / overloaded / wrong department" />
+              <Input data-testid="reassign-reason-input" value={reassignForm.reason}
+                onChange={(e) => setReassignForm({ ...reassignForm, reason: e.target.value })}
+                className="mt-2 bg-white/5 border-white/10" placeholder="Reason for reassignment" />
             </div>
           </div>
           <DialogFooter>
@@ -254,7 +306,7 @@ export default function IssueDetail() {
                 </div>
               </div>
             ))}
-            {comments.length === 0 && <div className="text-slate-500 text-sm">No comments yet — be the first.</div>}
+            {comments.length === 0 && <div className="text-slate-500 text-sm">No comments yet.</div>}
           </div>
           <div className="flex gap-2">
             <Textarea data-testid="comment-input" value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a comment…" className="bg-white/5 border-white/10 focus:border-cyan-400" rows={2} />
