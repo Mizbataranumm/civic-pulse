@@ -83,7 +83,7 @@ export default function IssueDetail() {
     } catch (e) {
       console.error("Failed to load issue", e);
     }
-  }, []);
+  }, [id]);
 
   useEffect(() => {
   load();
@@ -106,7 +106,7 @@ export default function IssueDetail() {
 
   if (!data) return <div className="text-slate-400 p-6">Loading…</div>;
   const { issue, comments, activity } = data;
-  const canUpdate = user?.role === "officonst load = async () => {cial" || user?.role === "supervisor";
+  const canUpdate = user?.role === "official" || user?.role === "supervisor";
   const verification = issue.resolution_verification;
   const verificationUnavailable = verification?.verification_status === "unavailable";
   const verificationSuspicious = Boolean(verification?.suspicious);
