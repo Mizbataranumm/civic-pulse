@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api, CATEGORY_LABELS } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -76,18 +76,20 @@ export default function IssueDetail() {
     }
   };
 
-  const load = async () => {
+  const load = useCallback(async () => {
     try {
       const { data } = await api.get(`/issues/${id}`);
       setData(data);
     } catch (e) {
       console.error("Failed to load issue", e);
     }
-  };
+  }, []);
 
   useEffect(() => {
   load();
 }, [load]);
+
+ 
   // useEffect(() => { load(); }, [id]);
 
   useEffect(() => {
@@ -104,7 +106,7 @@ export default function IssueDetail() {
 
   if (!data) return <div className="text-slate-400 p-6">Loading…</div>;
   const { issue, comments, activity } = data;
-  const canUpdate = user?.role === "official" || user?.role === "supervisor";
+  const canUpdate = user?.role === "officonst load = async () => {cial" || user?.role === "supervisor";
   const verification = issue.resolution_verification;
   const verificationUnavailable = verification?.verification_status === "unavailable";
   const verificationSuspicious = Boolean(verification?.suspicious);
