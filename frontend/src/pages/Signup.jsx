@@ -6,9 +6,10 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuth } from "@/contexts/AuthContext";
-import { Activity, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { toast } from "sonner";
 import { CATEGORY_LABELS } from "@/lib/api";
+import BrandLogo from "@/components/BrandLogo";
 
 const WARDS = ["Central", "North", "South", "East", "West"];
 const ASSIGNABLE_CATS = Object.keys(CATEGORY_LABELS).filter((c) => c !== "other");
@@ -53,9 +54,7 @@ export default function Signup() {
     <div className="min-h-screen bg-background flex items-center justify-center p-6">
       <div className="w-full max-w-md">
         <Link to="/" className="flex items-center gap-2.5 mb-10" data-testid="signup-logo">
-          <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #06b6d4, #10b981)" }}>
-            <Activity className="w-4 h-4 text-black" strokeWidth={2.8} />
-          </div>
+          <BrandLogo />
           <div>
             <div className="font-heading font-bold text-lg">CivicPulse</div>
             <div className="uppercase-label text-slate-500 -mt-0.5">Smart Governance</div>

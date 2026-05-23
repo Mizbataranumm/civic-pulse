@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
-import { Activity, ArrowRight, Mic, Bot, Sparkles, ShieldCheck, MapPin, BarChart3 } from "lucide-react";
+import { ArrowRight, Mic, Bot, Sparkles, ShieldCheck, MapPin, BarChart3 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api, CATEGORY_LABELS } from "@/lib/api";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
+import BrandLogo from "@/components/BrandLogo";
 
 const HERO_BG = "https://static.prod-images.emergentagent.com/jobs/f651b65c-d079-4fe2-aa77-aa015c70639a/images/9f3f85492b2cf0b2c2242cc2ad0c8c249035f7768cdb3cbd06fcf740a2d7a2df.png";
 const DASH_PREVIEW = "https://static.prod-images.emergentagent.com/jobs/f651b65c-d079-4fe2-aa77-aa015c70639a/images/a30a79aad530e13c04cf748ad0ef3bec44b8a6514d9fae477365680df0b79ea4.png";
@@ -33,9 +34,7 @@ export default function Landing() {
       <header className="fixed top-0 inset-x-0 z-30 glass-strong border-b border-white/5">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5" data-testid="landing-logo">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #06b6d4, #10b981)" }}>
-              <Activity className="w-4 h-4 text-black" strokeWidth={2.8} />
-            </div>
+            <BrandLogo size="sm" />
             <div>
               <div className="font-heading font-bold text-base">CivicPulse</div>
               <div className="uppercase-label text-slate-500 -mt-0.5">Smart Governance</div>

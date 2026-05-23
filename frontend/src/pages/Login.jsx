@@ -4,8 +4,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useAuth } from "@/contexts/AuthContext";
-import { Activity, ArrowRight } from "lucide-react";
+import { ArrowRight } from "lucide-react";
 import { toast } from "sonner";
+import BrandLogo from "@/components/BrandLogo";
 
 export default function Login() {
   const { login } = useAuth();
@@ -35,9 +36,7 @@ export default function Login() {
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           <Link to="/" className="flex items-center gap-2.5 mb-10" data-testid="login-logo">
-            <div className="w-9 h-9 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #06b6d4, #10b981)" }}>
-              <Activity className="w-4 h-4 text-black" strokeWidth={2.8} />
-            </div>
+            <BrandLogo />
             <div>
               <div className="font-heading font-bold text-lg">CivicPulse</div>
               <div className="uppercase-label text-slate-500 -mt-0.5">Smart Governance</div>

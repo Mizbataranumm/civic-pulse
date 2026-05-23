@@ -185,7 +185,7 @@ export default function SupervisorDashboard() {
         <div className="lg:col-span-8 glass rounded-2xl p-6">
           <div className="uppercase-label text-cyan-400 mb-2">CITY HEATMAP</div>
           <h3 className="font-heading font-bold text-2xl mb-5">Issues by location</h3>
-          <MapView issues={issues} height="420px" />
+          <MapView issues={issues} height="420px" syncView={false} />
         </div>
         <div className="lg:col-span-4 glass rounded-2xl p-6">
           <div className="uppercase-label text-emerald-400 mb-2">7-DAY TREND</div>

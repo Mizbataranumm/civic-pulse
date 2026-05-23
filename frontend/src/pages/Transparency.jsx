@@ -2,11 +2,12 @@ import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, CATEGORY_LABELS } from "@/lib/api";
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, PieChart, Pie, Cell, LineChart, Line, CartesianGrid } from "recharts";
-import { Activity, ArrowLeft } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
 import MapView from "@/components/MapView";
 import { Button } from "@/components/ui/button";
 import RetellOrb from "@/components/RetellOrb";
+import BrandLogo from "@/components/BrandLogo";
 
 const CHART_COLORS = ["#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#3b82f6", "#ec4899", "#94a3b8"];
 
@@ -44,9 +45,7 @@ export default function Transparency() {
       <header className="border-b border-white/5 glass-strong sticky top-0 z-20">
         <div className="max-w-7xl mx-auto px-6 py-3 flex items-center justify-between">
           <Link to="/" className="flex items-center gap-2.5" data-testid="transparency-logo">
-            <div className="w-8 h-8 rounded-lg flex items-center justify-center" style={{ background: "linear-gradient(135deg, #06b6d4, #10b981)" }}>
-              <Activity className="w-4 h-4 text-black" strokeWidth={2.8} />
-            </div>
+            <BrandLogo size="sm" />
             <div>
               <div className="font-heading font-bold text-base">CivicPulse</div>
               <div className="uppercase-label text-slate-500 -mt-0.5">Public Transparency</div>
@@ -170,7 +169,7 @@ export default function Transparency() {
               <span className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full" style={{background:"#10b981"}}></span>Resolved</span>
             </div>
           </div>
-          <MapView issues={issues} height="520px" />
+          <MapView issues={issues} height="520px" syncView={false} />
         </div>
 
         {/* Recent feed */}

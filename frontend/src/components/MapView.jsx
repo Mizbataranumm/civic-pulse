@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo, useRef } from "react";
 import { Circle, CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import { CATEGORY_LABELS, STATUS_COLORS } from "@/lib/api";
@@ -12,7 +12,7 @@ const buildIcon = (status) => {
   return L.divIcon({
     className: "civic-marker",
     html: `<div style="position:relative;width:28px;height:28px;">
-      <div style="position:absolute;inset:0;background:${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 12px ${color}77;border:2px solid rgba(255,255,255,0.98);"></div>
+      <div style="position:absolute;inset:0;background:${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 2px 8px rgba(15,23,42,0.28);border:2px solid rgba(255,255,255,0.98);"></div>
       <div style="position:absolute;left:8px;top:8px;width:12px;height:12px;background:#172033;border-radius:50%;"></div>
     </div>`,
     iconSize: [28, 28],
@@ -33,17 +33,50 @@ const pickedPinIcon = L.divIcon({
   popupAnchor: [0, -30],
 });
 
-function FitToBounds({ issues }) {
+function FitToBounds({ issues, userInteractedRef, fitRequest = 0 }) {
   const map = useMap();
+  const lastBoundsKey = useRef("");
+  const fitPoints = useMemo(() => (
+    (issues || [])
+      .map((i) => ({ id: i.id, lat: Number(i.latitude), lng: Number(i.longitude) }))
+      .filter((i) => Number.isFinite(i.lat) && Number.isFinite(i.lng))
+  ), [issues]);
+  const boundsKey = useMemo(() => (
+    fitPoints
+      .map((i) => `${i.id}:${i.lat.toFixed(5)},${i.lng.toFixed(5)}`)
+      .sort()
+      .join("|")
+  ), [fitPoints]);
+
   useEffect(() => {
-    if (!issues || issues.length === 0) return;
+    if (fitPoints.length === 0) return;
+    const requestKey = `${boundsKey}:${fitRequest}`;
+    if (lastBoundsKey.current === requestKey) return;
+    if (userInteractedRef?.current && !fitRequest) {
+      lastBoundsKey.current = boundsKey;
+      return;
+    }
+    lastBoundsKey.current = requestKey;
+
     try {
-      const bounds = L.latLngBounds(issues.map((i) => [i.latitude, i.longitude]));
+      const bounds = L.latLngBounds(fitPoints.map((i) => [i.lat, i.lng]));
       if (bounds.isValid()) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 13 });
     } catch (e) {
       console.error("Failed to fit map bounds", e);
     }
-  }, [issues, map]);
+  }, [boundsKey, fitPoints, fitRequest, map, userInteractedRef]);
+  return null;
+}
+
+function InteractionTracker({ userInteractedRef }) {
+  useMapEvents({
+    dragstart() {
+      userInteractedRef.current = true;
+    },
+    zoomstart() {
+      userInteractedRef.current = true;
+    },
+  });
   return null;
 }
 
@@ -69,6 +102,24 @@ function SyncMapView({ center, zoom, pickedPin }) {
   return null;
 }
 
+function FocusMapView({ focusPoint }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!focusPoint) return;
+    const lat = Number(focusPoint.lat);
+    const lng = Number(focusPoint.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+
+    map.flyTo([lat, lng], focusPoint.zoom || 16, {
+      animate: true,
+      duration: 0.45,
+    });
+  }, [focusPoint, map]);
+
+  return null;
+}
+
 function LocationPicker({ onPick }) {
   useMapEvents({
     click(e) {
@@ -86,9 +137,51 @@ export default function MapView({
   onPickLocation = null,
   pickedPin = null,
   pickedPinLabel = "",
+  syncPickedPin = true,
+  syncView = true,
+  focusPoint = null,
+  fitRequest = 0,
   accuracyRadius = null,
   fit = true,
 }) {
+  const syncPin = syncPickedPin ? pickedPin : null;
+  const userInteractedRef = useRef(false);
+  const markerItems = useMemo(() => {
+    const valid = (issues || [])
+      .map((issue) => ({
+        issue,
+        lat: Number(issue.latitude),
+        lng: Number(issue.longitude),
+      }))
+      .filter((item) => Number.isFinite(item.lat) && Number.isFinite(item.lng));
+
+    const groups = new Map();
+    valid.forEach((item) => {
+      const key = `${item.lat.toFixed(5)},${item.lng.toFixed(5)}`;
+      const group = groups.get(key) || [];
+      group.push(item);
+      groups.set(key, group);
+    });
+
+    return valid.map((item) => {
+      const key = `${item.lat.toFixed(5)},${item.lng.toFixed(5)}`;
+      const group = groups.get(key) || [item];
+      const index = group.findIndex((candidate) => candidate.issue.id === item.issue.id);
+      if (group.length <= 1 || index < 0) {
+        return { ...item, displayLat: item.lat, displayLng: item.lng, overlapCount: group.length };
+      }
+
+      const angle = (Math.PI * 2 * index) / group.length;
+      const radius = 0.00028 + Math.floor(index / 8) * 0.00018;
+      return {
+        ...item,
+        displayLat: item.lat + Math.sin(angle) * radius,
+        displayLng: item.lng + Math.cos(angle) * radius,
+        overlapCount: group.length,
+      };
+    });
+  }, [issues]);
+
   return (
     <div className="relative rounded-xl overflow-hidden border border-white/10 bg-slate-100" style={{ height }}>
       <MapContainer center={center} zoom={zoom} style={{ width: "100%", height: "100%" }} scrollWheelZoom={true} data-testid="map-container">
@@ -96,11 +189,14 @@ export default function MapView({
           url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
           attribution='&copy; OpenStreetMap &copy; CARTO'
         />
-        <SyncMapView center={center} zoom={zoom} pickedPin={pickedPin} />
-        {fit && <FitToBounds issues={issues} />}
+        <InteractionTracker userInteractedRef={userInteractedRef} />
+        {syncView && <SyncMapView center={center} zoom={zoom} pickedPin={syncPin} />}
+        {focusPoint && <FocusMapView focusPoint={focusPoint} />}
+        {fit && <FitToBounds issues={issues} userInteractedRef={userInteractedRef} fitRequest={fitRequest} />}
         {onPickLocation && <LocationPicker onPick={onPickLocation} />}
-        {issues.map((issue) => (
-          <Marker key={issue.id} position={[issue.latitude, issue.longitude]} icon={buildIcon(issue.status)}>
+        {markerItems.map(({ issue, displayLat, displayLng, overlapCount }) => {
+          return (
+          <Marker key={issue.id} position={[displayLat, displayLng]} icon={buildIcon(issue.status)}>
             <Popup>
               <div className="space-y-2 min-w-[200px]">
                 <div className="flex items-center gap-2">
@@ -110,10 +206,16 @@ export default function MapView({
                 <div className="font-heading font-semibold text-sm">{issue.title}</div>
                 <div className="text-xs text-slate-400">{CATEGORY_LABELS[issue.category]}</div>
                 <div className="text-xs text-slate-300">{issue.address}</div>
+                {overlapCount > 1 && (
+                  <div className="text-[10px] text-amber-300">
+                    {overlapCount} reports share this exact map point; pins are slightly separated.
+                  </div>
+                )}
               </div>
             </Popup>
           </Marker>
-        ))}
+          );
+        })}
         {pickedPin && (
           <>
             {accuracyRadius && (
@@ -137,6 +239,13 @@ export default function MapView({
               </Popup>
             </Marker>
           </>
+        )}
+        {focusPoint && Number.isFinite(Number(focusPoint.lat)) && Number.isFinite(Number(focusPoint.lng)) && (
+          <CircleMarker
+            center={[Number(focusPoint.lat), Number(focusPoint.lng)]}
+            radius={22}
+            pathOptions={{ color: "#2563eb", weight: 3, fillColor: "#2563eb", fillOpacity: 0.08 }}
+          />
         )}
       </MapContainer>
       {pickedPinLabel && (

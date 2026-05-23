@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -924,12 +924,14 @@ async def create_issue(payload: IssueCreate, user=Depends(get_current_user)):
 
 @api_router.get("/issues")
 async def list_issues(
+    response: Response,
     status_filter: Optional[str] = None,
     category: Optional[str] = None,
     mine: Optional[bool] = False,
     assigned: Optional[bool] = False,
     user=Depends(get_current_user),
 ):
+    response.headers["Cache-Control"] = "no-store"
     query = {}
     if status_filter:
         query['status'] = status_filter
@@ -947,8 +949,9 @@ async def list_issues(
 
 
 @api_router.get("/issues/public")
-async def list_issues_public():
+async def list_issues_public(response: Response):
     """Public endpoint for transparency dashboard — no auth, returns minimal fields."""
+    response.headers["Cache-Control"] = "no-store"
     issues = await db.issues.find(
         {},
         {"_id": 0, "id": 1, "title": 1, "category": 1, "priority": 1, "status": 1,

@@ -1,9 +1,10 @@
 import React from "react";
 import { Link, NavLink, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
-import { LayoutDashboard, FilePlus2, List, Map, Users, BarChart3, LogOut, Activity } from "lucide-react";
+import { LayoutDashboard, FilePlus2, List, Map, Users, BarChart3, LogOut } from "lucide-react";
 import NotificationBell from "@/components/NotificationBell";
 import RetellOrb from "@/components/RetellOrb";
+import BrandLogo from "@/components/BrandLogo";
 
 const navByRole = {
   citizen: [
@@ -36,10 +37,7 @@ export default function AppLayout({ children }) {
       {/* Sidebar */}
       <aside className="w-64 border-r border-white/5 bg-[#0a0a0c] hidden md:flex flex-col">
         <Link to="/" className="px-6 py-5 border-b border-white/5 flex items-center gap-2.5" data-testid="sidebar-logo">
-          <div className="relative w-8 h-8 rounded-lg flex items-center justify-center"
-               style={{ background: "linear-gradient(135deg, #06b6d4, #10b981)" }}>
-            <Activity className="w-4 h-4 text-black" strokeWidth={2.8} />
-          </div>
+          <BrandLogo size="sm" />
           <div>
             <div className="font-heading font-bold text-base tracking-tight">CivicPulse</div>
             <div className="uppercase-label text-slate-500 -mt-0.5">Smart Governance</div>
