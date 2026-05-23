@@ -355,11 +355,11 @@ Our code **doesn't process the audio** — we delegate entirely to Retell, who s
 
 | Name | Role | Contribution |
 |---|---|---|
-| _Add your team here_ | Full-stack | Backend FastAPI + Mongo schema + JWT auth |
-| _Add your team here_ | Frontend | React + Tailwind + Leaflet + Recharts dashboards |
-| _Add your team here_ | AI | Gemini integration + prompt engineering |
-| _Add your team here_ | Design | Glassmorphism design system + landing page |
-| _Add your team here_ | Voice | Retell orb integration + Nova persona |
+| _Mizba_ | Full-stack | Backend FastAPI + Mongo schema + JWT auth |
+| _Thara_ | Frontend | React + Tailwind + Leaflet + Recharts dashboards |
+| _Mizba_ | AI | Gemini integration + prompt engineering |
+| _Thara_ | Design | Glassmorphism design system + landing page |
+| _Mizba_ | Voice | Retell orb integration + Nova persona |
 
 ---
 
