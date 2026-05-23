@@ -182,8 +182,7 @@ sudo supervisorctl status
 # Env: REACT_APP_BACKEND_URL=<your-backend-host>
 ```
 
-### Backend → Render / Railway / Fly.io
-- Dockerfile (or use Render's native Python build)
+### Backend → Render 
 - Start: `uvicorn server:app --host 0.0.0.0 --port $PORT`
 - Env: `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `EMERGENT_LLM_KEY`, `CORS_ORIGINS=https://<vercel-domain>`
 - Render link:https://civicpulse-backend-gux7.onrender.com/
