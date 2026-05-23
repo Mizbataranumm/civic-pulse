@@ -174,7 +174,7 @@ sudo supervisorctl status
 
 ## 🚀 Deployment Instructions
 
-### Frontend → Vercel
+### Frontend → Vercel Demo link :https://civic-pulse-orpin.vercel.app/
 ```bash
 # Connect repo on vercel.com
 # Build: yarn build
@@ -186,6 +186,7 @@ sudo supervisorctl status
 - Dockerfile (or use Render's native Python build)
 - Start: `uvicorn server:app --host 0.0.0.0 --port $PORT`
 - Env: `MONGO_URL`, `DB_NAME`, `JWT_SECRET`, `EMERGENT_LLM_KEY`, `CORS_ORIGINS=https://<vercel-domain>`
+- Render link:https://civicpulse-backend-gux7.onrender.com/
 
 ### MongoDB Atlas
 1. Create cluster (free tier OK)
