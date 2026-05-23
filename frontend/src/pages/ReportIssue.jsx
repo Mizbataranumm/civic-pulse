@@ -28,23 +28,43 @@ export default function ReportIssue() {
   const [submitting, setSubmitting] = useState(false);
   const [locatingAddress, setLocatingAddress] = useState(false);
   const [reverseGeocoding, setReverseGeocoding] = useState(false);
+  const [locatingUser, setLocatingUser] = useState(false);
+  const [locationAccuracy, setLocationAccuracy] = useState(null);
 
   const setLoc = useCallback((lat, lng) => {
     setPicked([lat, lng]);
     setForm((f) => ({ ...f, latitude: lat, longitude: lng }));
   }, []);
 
+  const buildEnglishAddress = useCallback((data) => {
+    const addr = data.address || {};
+    const parts = [
+      addr.road || addr.pedestrian || addr.neighbourhood || addr.suburb || addr.quarter,
+      addr.city || addr.town || addr.village || addr.municipality || addr.state_district,
+      addr.state,
+    ].filter(Boolean);
+
+    const label = parts.join(", ") || data.display_name || "";
+    return label.replace(/\s+/g, " ").trim();
+  }, []);
+
   const syncAddressFromCoords = useCallback(async (lat, lng) => {
     setReverseGeocoding(true);
     try {
-      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18&addressdetails=1`);
+      const params = new URLSearchParams({
+        format: "jsonv2",
+        lat: String(lat),
+        lon: String(lng),
+        zoom: "18",
+        addressdetails: "1",
+        "accept-language": "en",
+      });
+      const res = await fetch(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`, {
+        headers: { "Accept-Language": "en" },
+      });
       if (!res.ok) throw new Error("reverse geocode failed");
       const data = await res.json();
-      const addr = data.address || {};
-      const label = [
-        addr.road || addr.pedestrian || addr.neighbourhood || addr.suburb,
-        addr.city || addr.town || addr.village || addr.state_district,
-      ].filter(Boolean).join(", ") || data.display_name;
+      const label = buildEnglishAddress(data);
 
       if (label) {
         setForm((f) => ({ ...f, address: label }));
@@ -54,7 +74,7 @@ export default function ReportIssue() {
     } finally {
       setReverseGeocoding(false);
     }
-  }, []);
+  }, [buildEnglishAddress]);
 
   const locateAddressOnMap = useCallback(async () => {
     const query = form.address.trim();
@@ -70,8 +90,12 @@ export default function ReportIssue() {
         format: "jsonv2",
         limit: "1",
         countrycodes: "in",
+        addressdetails: "1",
+        "accept-language": "en",
       });
-      const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`);
+      const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+        headers: { "Accept-Language": "en" },
+      });
       if (!res.ok) throw new Error("address lookup failed");
       const data = await res.json();
       const best = data?.[0];
@@ -84,7 +108,8 @@ export default function ReportIssue() {
       const lat = Number(best.lat);
       const lng = Number(best.lon);
       setLoc(lat, lng);
-      setForm((f) => ({ ...f, address: best.display_name || f.address }));
+      setLocationAccuracy(null);
+      setForm((f) => ({ ...f, address: buildEnglishAddress(best) || f.address }));
       toast.success("Pinned address on the map");
     } catch (e) {
       console.error("Address lookup failed", e);
@@ -92,9 +117,10 @@ export default function ReportIssue() {
     } finally {
       setLocatingAddress(false);
     }
-  }, [form.address, setLoc]);
+  }, [buildEnglishAddress, form.address, setLoc]);
 
   const pickOnMap = useCallback((lat, lng) => {
+    setLocationAccuracy(null);
     setLoc(lat, lng);
     syncAddressFromCoords(lat, lng);
   }, [setLoc, syncAddressFromCoords]);
@@ -104,13 +130,26 @@ export default function ReportIssue() {
       toast.error("Geolocation unavailable in this browser");
       return;
     }
+    setLocatingUser(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
+        const accuracy = Math.round(pos.coords.accuracy || 0);
         setLoc(pos.coords.latitude, pos.coords.longitude);
+        setLocationAccuracy(accuracy || null);
         syncAddressFromCoords(pos.coords.latitude, pos.coords.longitude);
-        toast.success("Location detected");
+        if (accuracy && accuracy > 100) {
+          toast.warning(`Location detected, but accuracy is about ${accuracy}m. Move the pin if needed.`);
+        } else {
+          toast.success(accuracy ? `Location detected within about ${accuracy}m` : "Location detected");
+        }
+        setLocatingUser(false);
       },
-      () => toast.error("Could not get location")
+      (err) => {
+        const denied = err.code === err.PERMISSION_DENIED;
+        toast.error(denied ? "Allow location access in the browser and try again" : "Could not get a precise location");
+        setLocatingUser(false);
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
     );
   };
 
@@ -297,13 +336,25 @@ export default function ReportIssue() {
           <div className="glass rounded-2xl p-6">
             <div className="flex items-center justify-between mb-3">
               <Label className="uppercase-label text-slate-400">Pin Location on Map</Label>
-              <Button type="button" variant="outline" size="sm" onClick={useMyLocation} data-testid="use-my-location-button" className="border-white/15 hover:bg-cyan-500/10 hover:text-cyan-300 text-xs h-8">
-                <MapPin className="w-3.5 h-3.5 mr-1" /> Use my location
+              <Button type="button" variant="outline" size="sm" onClick={useMyLocation} disabled={locatingUser} data-testid="use-my-location-button" className="border-white/15 hover:bg-cyan-500/10 hover:text-cyan-300 text-xs h-8">
+                {locatingUser ? <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> : <MapPin className="w-3.5 h-3.5 mr-1" />}
+                {locatingUser ? "Locating..." : "Use my location"}
               </Button>
             </div>
-            <MapView issues={[]} center={picked} zoom={16} height="280px" onPickLocation={pickOnMap} pickedPin={picked} fit={false} />
+            <MapView
+              issues={[]}
+              center={picked}
+              zoom={17}
+              height="280px"
+              onPickLocation={pickOnMap}
+              pickedPin={picked}
+              pickedPinLabel={form.address}
+              accuracyRadius={locationAccuracy}
+              fit={false}
+            />
             <div className="mt-2 text-xs font-mono-data text-slate-500">
               {picked[0].toFixed(5)}, {picked[1].toFixed(5)}
+              {locationAccuracy && <span className="ml-2 text-cyan-400">accuracy ~{locationAccuracy}m</span>}
             </div>
             <div className="mt-1 text-[11px] text-slate-500">
               {reverseGeocoding ? "Updating address from selected pin..." : "Click the exact road spot to place the report pin."}

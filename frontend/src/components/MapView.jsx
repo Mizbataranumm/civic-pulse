@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
+import { Circle, CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap, useMapEvents } from "react-leaflet";
 import L from "leaflet";
 import { CATEGORY_LABELS, STATUS_COLORS } from "@/lib/api";
 import { StatusBadge, PriorityBadge } from "@/components/StatusBadge";
@@ -12,8 +12,8 @@ const buildIcon = (status) => {
   return L.divIcon({
     className: "civic-marker",
     html: `<div style="position:relative;width:28px;height:28px;">
-      <div style="position:absolute;inset:0;background:${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 14px ${color}99;border:2px solid rgba(255,255,255,0.9);"></div>
-      <div style="position:absolute;left:8px;top:8px;width:12px;height:12px;background:rgba(0,0,0,0.6);border-radius:50%;"></div>
+      <div style="position:absolute;inset:0;background:${color};border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 12px ${color}77;border:2px solid rgba(255,255,255,0.98);"></div>
+      <div style="position:absolute;left:8px;top:8px;width:12px;height:12px;background:#172033;border-radius:50%;"></div>
     </div>`,
     iconSize: [28, 28],
     iconAnchor: [14, 28],
@@ -24,9 +24,9 @@ const buildIcon = (status) => {
 const pickedPinIcon = L.divIcon({
   className: "civic-picked-marker",
   html: `<div style="position:relative;width:30px;height:30px;">
-    <div style="position:absolute;left:50%;top:50%;width:30px;height:30px;transform:translate(-50%,-50%);border-radius:999px;background:rgba(245,158,11,0.2);box-shadow:0 0 0 10px rgba(245,158,11,0.08);"></div>
-    <div style="position:absolute;inset:0;background:#f59e0b;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 0 18px rgba(245,158,11,0.7);border:3px solid rgba(255,255,255,0.96);"></div>
-    <div style="position:absolute;left:9px;top:9px;width:12px;height:12px;background:rgba(0,0,0,0.72);border-radius:50%;"></div>
+    <div style="position:absolute;left:50%;top:50%;width:30px;height:30px;transform:translate(-50%,-50%);border-radius:999px;background:rgba(245,158,11,0.2);box-shadow:0 0 0 10px rgba(245,158,11,0.12);"></div>
+    <div style="position:absolute;inset:0;background:#f59e0b;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 14px rgba(245,158,11,0.55);border:3px solid rgba(255,255,255,0.98);"></div>
+    <div style="position:absolute;left:9px;top:9px;width:12px;height:12px;background:#172033;border-radius:50%;"></div>
   </div>`,
   iconSize: [30, 30],
   iconAnchor: [15, 30],
@@ -78,12 +78,22 @@ function LocationPicker({ onPick }) {
   return null;
 }
 
-export default function MapView({ issues = [], center = [20.5937, 78.9629], zoom = 5, height = "500px", onPickLocation = null, pickedPin = null, fit = true }) {
+export default function MapView({
+  issues = [],
+  center = [20.5937, 78.9629],
+  zoom = 5,
+  height = "500px",
+  onPickLocation = null,
+  pickedPin = null,
+  pickedPinLabel = "",
+  accuracyRadius = null,
+  fit = true,
+}) {
   return (
-    <div className="relative rounded-xl overflow-hidden border border-white/10" style={{ height }}>
+    <div className="relative rounded-xl overflow-hidden border border-white/10 bg-slate-100" style={{ height }}>
       <MapContainer center={center} zoom={zoom} style={{ width: "100%", height: "100%" }} scrollWheelZoom={true} data-testid="map-container">
         <TileLayer
-          url="https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png"
+          url="https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png"
           attribution='&copy; OpenStreetMap &copy; CARTO'
         />
         <SyncMapView center={center} zoom={zoom} pickedPin={pickedPin} />
@@ -106,17 +116,34 @@ export default function MapView({ issues = [], center = [20.5937, 78.9629], zoom
         ))}
         {pickedPin && (
           <>
+            {accuracyRadius && (
+              <Circle
+                center={pickedPin}
+                radius={accuracyRadius}
+                pathOptions={{ color: "#2563eb", weight: 2, fillColor: "#3b82f6", fillOpacity: 0.12 }}
+              />
+            )}
             <CircleMarker
               center={pickedPin}
               radius={16}
               pathOptions={{ color: "#f59e0b", weight: 2, fillColor: "#f59e0b", fillOpacity: 0.14 }}
             />
             <Marker position={pickedPin} icon={pickedPinIcon} zIndexOffset={1000}>
-              <Popup>Selected issue location</Popup>
+              <Popup>
+                <div className="max-w-[220px] text-sm">
+                  <div className="font-semibold text-slate-900">Selected issue location</div>
+                  {pickedPinLabel && <div className="mt-1 text-slate-600">{pickedPinLabel}</div>}
+                </div>
+              </Popup>
             </Marker>
           </>
         )}
       </MapContainer>
+      {pickedPinLabel && (
+        <div className="absolute left-3 right-3 bottom-3 z-[400] rounded-md bg-white/95 px-3 py-2 text-xs text-slate-700 shadow-md border border-slate-200">
+          {pickedPinLabel}
+        </div>
+      )}
     </div>
   );
 }

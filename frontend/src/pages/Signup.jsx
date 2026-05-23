@@ -30,6 +30,9 @@ export default function Signup() {
 
   const submit = async (e) => {
     e.preventDefault();
+    if (form.full_name.trim().length < 2) {
+      toast.error("Enter the official's full name"); return;
+    }
     if (form.phone_number && !/^[+\-\d\s()]{7,20}$/.test(form.phone_number)) {
       toast.error("Phone number looks invalid"); return;
     }

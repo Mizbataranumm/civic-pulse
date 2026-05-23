@@ -23,6 +23,7 @@ export default function IssueDetail() {
   const [resolveOpen, setResolveOpen] = useState(false);
   const [reassignOpen, setReassignOpen] = useState(false);
   const [callingReporter, setCallingReporter] = useState(false);
+  const [voiceStatus, setVoiceStatus] = useState(null);
   const [resolveForm, setResolveForm] = useState({ resolution_note: "", resolution_image: null });
   const [reassignForm, setReassignForm] = useState({ new_official_id: "", reason: "" });
 
@@ -101,12 +102,20 @@ export default function IssueDetail() {
       api.get("/officials")
         .then((r) => setOfficials(r.data))
         .catch((e) => console.error("Failed to load officials", e));
+      api.get("/voice/status")
+        .then((r) => setVoiceStatus(r.data))
+        .catch(() => setVoiceStatus({ outbound_calls_ready: false, reason: "Voice calls unavailable" }));
     }
   }, [user]);
 
   if (!data) return <div className="text-slate-400 p-6">Loading…</div>;
   const { issue, comments, activity } = data;
+  const assignedProfile = issue.assigned_official_profile;
+  const assignedName = issue.assigned_official_name || assignedProfile?.full_name;
+  const assignedMissing = issue.assigned_official_id && !assignedName && assignedProfile === null;
   const canUpdate = user?.role === "official" || user?.role === "supervisor";
+  const voiceReady = voiceStatus?.outbound_calls_ready === true;
+  const voiceReason = voiceStatus?.reason || "Checking voice call setup...";
   const verification = issue.resolution_verification;
   const verificationUnavailable = verification?.verification_status === "unavailable";
   const verificationSuspicious = Boolean(verification?.suspicious);
@@ -145,6 +154,10 @@ export default function IssueDetail() {
   };
 
   const callReporter = async () => {
+    if (!voiceReady) {
+      toast.error(voiceReason);
+      return;
+    }
     setCallingReporter(true);
     try {
       const { data } = await api.post(`/issues/${id}/call-reporter`, {});
@@ -185,7 +198,8 @@ export default function IssueDetail() {
           <div className="mt-2 inline-flex items-center gap-2 text-xs text-slate-400">
             <span className="uppercase-label text-emerald-400">ROUTED TO ·</span>
             <span className="font-mono-data">{issue.assigned_department}</span>
-            {issue.assigned_official_name && <span className="text-slate-500">— {issue.assigned_official_name}</span>}
+            {assignedName && <span className="text-slate-500">— {assignedName}</span>}
+            {assignedMissing && <span className="text-amber-400">— official account missing</span>}
           </div>
         )}
         {verification && (
@@ -221,7 +235,17 @@ export default function IssueDetail() {
               </div>
               <div className="glass rounded-lg p-3">
                 <div className="uppercase-label text-slate-500">Assigned</div>
-                <div className="font-medium mt-1">{issue.assigned_official_name || "—"}</div>
+                <div className="font-medium mt-1">{assignedName || "Unassigned"}</div>
+                {assignedProfile && (
+                  <div className="mt-1 text-[10px] text-slate-500 font-mono-data truncate">
+                    {assignedProfile.email} · {assignedProfile.ward}
+                  </div>
+                )}
+                {assignedMissing && (
+                  <div className="mt-1 text-[10px] text-amber-400">
+                    Account missing. Supervisor should reassign.
+                  </div>
+                )}
               </div>
               <div className="glass rounded-lg p-3">
                 <div className="uppercase-label text-slate-500">Upvotes</div>
@@ -258,13 +282,17 @@ export default function IssueDetail() {
             )}
             <Button
               onClick={callReporter}
-              disabled={callingReporter}
+              disabled={callingReporter || !voiceReady}
               variant="outline"
               data-testid="call-reporter-button"
-              className="border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300 hover:border-emerald-500/50 text-xs"
+              title={voiceReason}
+              className={voiceReady
+                ? "border-emerald-500/30 hover:bg-emerald-500/10 hover:text-emerald-300 hover:border-emerald-500/50 text-xs"
+                : "border-white/10 text-slate-500 text-xs"
+              }
             >
               <PhoneCall className="w-3.5 h-3.5 mr-1.5" />
-              {callingReporter ? "Calling reporter..." : "Call reporter with Nova"}
+              {callingReporter ? "Calling reporter..." : voiceReady ? "Call reporter with Nova" : "Voice calls disabled"}
             </Button>
           </div>
         </div>

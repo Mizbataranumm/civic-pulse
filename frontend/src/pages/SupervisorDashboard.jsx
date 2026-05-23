@@ -7,6 +7,32 @@ import MapView from "@/components/MapView";
 import { AlertTriangle, Users, BarChart3, Activity as ActivityIcon, ShieldAlert, Building2, History, Inbox } from "lucide-react";
 
 const CHART_COLORS = ["#06b6d4", "#10b981", "#f59e0b", "#ef4444", "#a855f7", "#3b82f6", "#ec4899", "#94a3b8"];
+const CATEGORY_ORDER = ["pothole", "garbage", "water_leakage", "streetlight", "drainage", "sewage", "illegal_construction", "fallen_tree", "other"];
+const WARD_ORDER = ["Central", "North", "South", "East", "West", "Unknown"];
+
+const orderIndex = (order, value) => {
+  const idx = order.indexOf(value || "Unknown");
+  return idx === -1 ? order.length : idx;
+};
+
+const stableAnalytics = (data) => {
+  if (!data) return null;
+  return {
+    ...data,
+    category_breakdown: [...(data.category_breakdown || [])].sort((a, b) =>
+      orderIndex(CATEGORY_ORDER, a.category) - orderIndex(CATEGORY_ORDER, b.category) ||
+      String(a.category || "").localeCompare(String(b.category || ""))
+    ),
+    ward_breakdown: [...(data.ward_breakdown || [])].sort((a, b) =>
+      orderIndex(WARD_ORDER, a.ward) - orderIndex(WARD_ORDER, b.ward) ||
+      String(a.ward || "").localeCompare(String(b.ward || ""))
+    ),
+    official_performance: [...(data.official_performance || [])].sort((a, b) =>
+      String(a.name || "").localeCompare(String(b.name || "")) ||
+      String(a.official_id || "").localeCompare(String(b.official_id || ""))
+    ),
+  };
+};
 
 const Stat = ({ label, value, suffix = "", accent, icon: Icon, testId }) => (
   <div className="glass rounded-xl p-5" data-testid={testId}>
@@ -30,7 +56,7 @@ export default function SupervisorDashboard() {
         api.get("/issues"),
         api.get("/governance"),
       ]);
-      setA(an.data);
+      setA(stableAnalytics(an.data));
       setIssues(is.data);
       setGov(gv.data);
     } catch (e) {

@@ -78,6 +78,8 @@ VALID_CATEGORIES = [
     'other',
 ]
 VALID_PRIORITIES = ['low', 'medium', 'high', 'critical']
+WARD_ORDER = ['Central', 'North', 'South', 'East', 'West', 'All', 'Unknown']
+STATUS_ORDER = ['submitted', 'acknowledged', 'in_progress', 'verification_pending', 'suspicious_resolution', 'resolved', 'closed']
 
 CATEGORY_ALIASES = {
     "water leakage": "water_leakage",
@@ -176,7 +178,7 @@ RESOLUTION_DOMAIN_KEYWORDS = {
 
 
 class SignupReq(BaseModel):
-    full_name: str
+    full_name: str = Field(..., min_length=2)
     email: EmailStr
     password: str
     role: Role = 'citizen'
@@ -239,6 +241,13 @@ def normalize_category(raw_category: str) -> str:
 def normalize_priority(raw_priority: str) -> str:
     raw = str(raw_priority or "medium").lower().strip()
     return raw if raw in VALID_PRIORITIES else "medium"
+
+
+def order_index(values: List[str], value: Optional[str]) -> int:
+    try:
+        return values.index(value or "Unknown")
+    except ValueError:
+        return len(values)
 
 
 def build_ai_summary(description: str) -> str:
@@ -470,6 +479,23 @@ def ensure_retell_outbound_config():
         )
 
 
+def retell_outbound_status() -> dict:
+    configured = bool(RETELL_API_KEY and RETELL_FROM_NUMBER)
+    ready = RETELL_ENABLE_OUTBOUND_CALLS and configured
+    if ready:
+        reason = "Outbound voice calls are ready."
+    elif not RETELL_ENABLE_OUTBOUND_CALLS:
+        reason = "Outbound voice calls are disabled."
+    else:
+        reason = "Retell outbound call setup is incomplete."
+    return {
+        "outbound_calls_enabled": RETELL_ENABLE_OUTBOUND_CALLS,
+        "outbound_calls_configured": configured,
+        "outbound_calls_ready": ready,
+        "reason": reason,
+    }
+
+
 async def create_retell_outbound_call(
     to_number: str,
     issue: dict,
@@ -619,6 +645,17 @@ async def auto_assign_official(category: str, ward: Optional[str] = None) -> Opt
             best_load = score
             best = c
     return best
+
+
+def assigned_to_official_query(official: dict, active_only: bool = True) -> dict:
+    matches = [{"assigned_official_id": official["id"]}]
+    if official.get("full_name"):
+        matches.append({"assigned_official_name": official["full_name"]})
+
+    query = {"$or": matches}
+    if active_only:
+        query["status"] = {"$nin": ["resolved", "closed"]}
+    return query
 
 
 async def ai_verify_resolution(original_desc: str, resolution_note: str, has_image: bool) -> dict:
@@ -929,6 +966,27 @@ async def get_issue(issue_id: str, user=Depends(get_current_user)):
     if not issue:
         raise HTTPException(status_code=404, detail="Not found")
     issue.update(compute_sla(issue))
+    assigned_id = issue.get("assigned_official_id")
+    if assigned_id:
+        assigned_profile = await db.profiles.find_one(
+            {"id": assigned_id, "role": "official"},
+            {"_id": 0, "password_hash": 0, "phone_number": 0}
+        )
+        if not assigned_profile and issue.get("assigned_official_name"):
+            assigned_profile = await db.profiles.find_one(
+                {"full_name": issue["assigned_official_name"], "role": "official"},
+                {"_id": 0, "password_hash": 0, "phone_number": 0}
+            )
+            if assigned_profile:
+                issue["assigned_official_id"] = assigned_profile["id"]
+                await db.issues.update_one(
+                    {"id": issue_id},
+                    {"$set": {
+                        "assigned_official_id": assigned_profile["id"],
+                        "assigned_official_name": assigned_profile["full_name"],
+                    }}
+                )
+        issue["assigned_official_profile"] = assigned_profile
     comments = await db.issue_comments.find({"issue_id": issue_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
     activity = await db.activity_logs.find({"issue_id": issue_id}, {"_id": 0}).sort("created_at", 1).to_list(500)
     return {"issue": issue, "comments": comments, "activity": activity}
@@ -1137,6 +1195,11 @@ async def call_issue_reporter(
     }
 
 
+@api_router.get("/voice/status")
+async def voice_status(user=Depends(require_roles('official', 'supervisor'))):
+    return retell_outbound_status()
+
+
 # ------------------- Notifications -------------------
 @api_router.get("/notifications")
 async def get_notifications(user=Depends(get_current_user)):
@@ -1162,16 +1225,19 @@ async def public_analytics():
     pipeline = [{"$group": {"_id": "$category", "count": {"$sum": 1}}}]
     cat_agg = await db.issues.aggregate(pipeline).to_list(50)
     category_breakdown = [{"category": c['_id'], "count": c['count']} for c in cat_agg]
+    category_breakdown.sort(key=lambda c: (order_index(VALID_CATEGORIES, c.get("category")), c.get("category") or ""))
 
     # Status breakdown
     pipeline = [{"$group": {"_id": "$status", "count": {"$sum": 1}}}]
     status_agg = await db.issues.aggregate(pipeline).to_list(50)
     status_breakdown = [{"status": s['_id'], "count": s['count']} for s in status_agg]
+    status_breakdown.sort(key=lambda s: (order_index(STATUS_ORDER, s.get("status")), s.get("status") or ""))
 
     # Ward breakdown
     pipeline = [{"$group": {"_id": "$ward", "count": {"$sum": 1}}}]
     ward_agg = await db.issues.aggregate(pipeline).to_list(50)
     ward_breakdown = [{"ward": w['_id'] or 'Unknown', "count": w['count']} for w in ward_agg]
+    ward_breakdown.sort(key=lambda w: (order_index(WARD_ORDER, w.get("ward")), w.get("ward") or ""))
 
     # Resolution time avg
     resolved_issues = await db.issues.find(
@@ -1249,6 +1315,7 @@ async def supervisor_analytics(user=Depends(require_roles('supervisor'))):
         "resolved": p['resolved'],
         "resolution_rate": round((p['resolved'] / p['assigned']) * 100, 1) if p['assigned'] else 0,
     } for p in perf]
+    official_perf.sort(key=lambda o: ((o.get("name") or "Unknown").lower(), o.get("official_id") or ""))
     base['official_performance'] = official_perf
     return base
 
@@ -1258,11 +1325,40 @@ async def list_officials(user=Depends(require_roles('supervisor', 'official'))):
     officials = await db.profiles.find({"role": "official"}, {"_id": 0, "password_hash": 0}).to_list(100)
     # Attach current workload (active issues)
     for o in officials:
-        o['active_load'] = await db.issues.count_documents({
-            "assigned_official_id": o['id'],
-            "status": {"$nin": ["resolved", "closed"]}
-        })
+        active_query = assigned_to_official_query(o)
+        active_issues = await db.issues.find(
+            active_query,
+            {
+                "_id": 0,
+                "id": 1,
+                "title": 1,
+                "category": 1,
+                "priority": 1,
+                "status": 1,
+                "address": 1,
+            }
+        ).sort("created_at", -1).to_list(25)
+        o['active_load'] = len(active_issues)
+        o['active_issues'] = active_issues
     return officials
+
+
+@api_router.delete("/officials/{official_id}")
+async def delete_official(official_id: str, user=Depends(require_roles('supervisor'))):
+    official = await db.profiles.find_one({"id": official_id, "role": "official"}, {"_id": 0})
+    if not official:
+        raise HTTPException(status_code=404, detail="Official not found")
+
+    active_load = await db.issues.count_documents(assigned_to_official_query(official))
+    if active_load > 0:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Reassign {active_load} active issue(s) before deleting this official."
+        )
+
+    await db.profiles.delete_one({"id": official_id, "role": "official"})
+    await db.notifications.delete_many({"user_id": official_id})
+    return {"ok": True, "deleted_official": official.get("full_name")}
 
 
 @api_router.get("/governance")
